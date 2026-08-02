@@ -88,6 +88,42 @@ describe("filterEvents", () => {
     expect(filtered[0]?.eventId).toBe("2");
   });
 
+  it("hides stdout and cleanup noise by default", () => {
+    const noisy: EventEnvelope[] = [
+      ...events,
+      {
+        schemaVersion: 1,
+        eventId: "5",
+        sequence: 5,
+        runId: "r",
+        type: "agent.stdout",
+        level: "info",
+        timestampUtc: "2026-08-02T09:00:04Z",
+        message: '{"type":"assistant","text":"..."}',
+        payload: {},
+      },
+      {
+        schemaVersion: 1,
+        eventId: "6",
+        sequence: 6,
+        runId: "r",
+        type: "agent.started",
+        level: "info",
+        timestampUtc: "2026-08-02T09:00:05Z",
+        message: "Architect agent is running",
+        payload: {},
+      },
+    ];
+    const filtered = filterEvents(noisy, DEFAULT_EVENT_FILTER);
+    expect(filtered.some((e) => e.type === "agent.stdout")).toBe(false);
+    expect(filtered.some((e) => e.type === "agent.started")).toBe(true);
+    expect(
+      filterEvents(noisy, DEFAULT_EVENT_FILTER, { includeNoise: true }).some(
+        (e) => e.type === "agent.stdout",
+      ),
+    ).toBe(true);
+  });
+
   it("truncates long messages and exports filtered json", () => {
     const long = "x".repeat(200);
     expect(truncateMessage(long).truncated).toBe(true);

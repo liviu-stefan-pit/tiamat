@@ -467,32 +467,40 @@ fn invoke_and_validate(
         capture.stderr.len()
     ));
 
-    // Prefer assistant-assembled text; fall back only to plan-shaped JSONL objects.
+    // Prefer assistant-assembled text when it is a plan; otherwise scan stream for plan JSON.
     let json_text = match extract_final_json_object(&parsed.assistant_text)
-        .or_else(|_| extract_plan_json_object_from_stream(&capture.stdout))
-    {
-        Ok(text) => text,
-        Err(err) => {
-            issues.push(err);
-            attempts.push(ArchitectAttemptRecord {
-                attempt: (attempts.len() as u32) + 1,
-                model: model.to_string(),
-                chat_id: chat_id.clone(),
-                usage: parsed.usage.clone(),
-                exit_code: capture.exit_code,
-                repaired,
-                validation_issues: issues
-                    .iter()
-                    .map(|m| crate::planner::types::PlanValidationIssue {
-                        code: "parse".into(),
-                        message: m.clone(),
-                        phase_id: None,
-                    })
-                    .collect(),
-                proof,
-            });
-            return Err(issues);
-        }
+        .ok()
+        .and_then(|text| {
+            serde_json::from_str::<serde_json::Value>(&text)
+                .ok()
+                .filter(looks_like_project_plan)
+                .map(|_| text)
+        }) {
+        Some(text) => text,
+        None => match extract_plan_json_object_from_stream(&capture.stdout) {
+            Ok(text) => text,
+            Err(err) => {
+                issues.push(err);
+                attempts.push(ArchitectAttemptRecord {
+                    attempt: (attempts.len() as u32) + 1,
+                    model: model.to_string(),
+                    chat_id: chat_id.clone(),
+                    usage: parsed.usage.clone(),
+                    exit_code: capture.exit_code,
+                    repaired,
+                    validation_issues: issues
+                        .iter()
+                        .map(|m| crate::planner::types::PlanValidationIssue {
+                            code: "parse".into(),
+                            message: m.clone(),
+                            phase_id: None,
+                        })
+                        .collect(),
+                    proof,
+                });
+                return Err(issues);
+            }
+        },
     };
 
     if !issues.is_empty() && parsed.terminal_ok == Some(false) {
@@ -651,10 +659,28 @@ fn extract_plan_json_object_from_stream(stdout: &str) -> Result<String, String> 
     if let Some(plan) = last_plan {
         return Ok(plan);
     }
-    extract_final_json_object(stdout)
+    // Fall back to assistant-style extraction, but never accept stream control frames.
+    let candidate = extract_final_json_object(stdout)?;
+    let value: serde_json::Value =
+        serde_json::from_str(&candidate).map_err(|e| format!("extracted JSON is invalid: {e}"))?;
+    if looks_like_project_plan(&value) {
+        return Ok(candidate);
+    }
+    Err("architect stream had no ProjectPlan JSON (ignored session/control frames)".into())
 }
 
 fn looks_like_project_plan(value: &serde_json::Value) -> bool {
+    if value.get("session_id").is_some() && value.get("phases").is_none() {
+        return false;
+    }
+    if value
+        .get("type")
+        .and_then(|t| t.as_str())
+        .is_some_and(|t| matches!(t, "system" | "result" | "tool_call" | "user" | "assistant"))
+        && value.get("phases").is_none()
+    {
+        return false;
+    }
     value.get("schemaVersion").is_some()
         && value.get("phases").and_then(|p| p.as_array()).is_some()
         && (value.get("runId").is_some() || value.get("run_id").is_some())

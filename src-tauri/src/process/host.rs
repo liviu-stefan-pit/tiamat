@@ -123,14 +123,7 @@ impl ProcessHost {
             }),
         };
         store.upsert_process(&record)?;
-        emit_process_event(
-            self,
-            store,
-            &record,
-            "process.registered",
-            "Process registered before spawn",
-            json!({}),
-        )?;
+        // Intentionally quiet: registration is internal; the agent.started event below is the user signal.
 
         let (spawned, mut child) = spawn::spawn_hosted(
             &request.argv,
@@ -162,17 +155,24 @@ impl ProcessHost {
             "degradedAssociation": spawned.degraded_association,
         });
         store.upsert_process(&record)?;
+        let agent_label = record
+            .phase_id
+            .as_deref()
+            .map(|p| {
+                if p == "architect" {
+                    "Architect".to_string()
+                } else {
+                    format!("Phase {p}")
+                }
+            })
+            .unwrap_or_else(|| "Agent".to_string());
         emit_process_event(
             self,
             store,
             &record,
-            "process.spawned",
-            &format!("Process spawned pid={}", spawned.pid),
-            json!({
-                "pid": spawned.pid,
-                "association": association_label,
-                "degradedAssociation": spawned.degraded_association,
-            }),
+            "agent.started",
+            &format!("{agent_label} agent is running"),
+            json!({ "pid": spawned.pid }),
         )?;
         if spawned.degraded_association {
             emit_process_event(
@@ -180,21 +180,13 @@ impl ProcessHost {
                 store,
                 &record,
                 "process.association_degraded",
-                "PROC_THREAD_ATTRIBUTE_JOB_LIST unavailable; used CREATE_SUSPENDED→assign→resume (orphan window on host crash)",
+                "Process association degraded; cleanup may be less reliable",
                 json!({ "association": association_label }),
             )?;
         }
 
         record.state = ProcessState::Active;
         store.upsert_process(&record)?;
-        emit_process_event(
-            self,
-            store,
-            &record,
-            "process.active",
-            "Process active under Job Object",
-            json!({}),
-        )?;
 
         let cancel = Arc::new(AtomicBool::new(false));
         let force = Arc::new(AtomicBool::new(false));
@@ -271,22 +263,52 @@ impl ProcessHost {
             record.reaped_at_utc = Some(chrono::Utc::now().to_rfc3339());
             record.exit_code = outcome.exit_code;
             store.upsert_process(&record)?;
-            emit_process_event(
-                self,
-                store,
-                &record,
-                "cleanup.proof",
-                if cleanup_ok {
-                    "Cleanup proof: zero active Job processes observed"
+            if cleanup_ok {
+                let label = record
+                    .phase_id
+                    .as_deref()
+                    .map(|p| {
+                        if p == "architect" {
+                            "Architect".to_string()
+                        } else {
+                            format!("Phase {p}")
+                        }
+                    })
+                    .unwrap_or_else(|| "Agent".to_string());
+                let status = if outcome.cancelled {
+                    "stopped"
+                } else if outcome.timed_out {
+                    "timed out"
+                } else if outcome.exit_code.unwrap_or(1) == 0 {
+                    "finished"
                 } else {
-                    "Cleanup proof FAILED: survivors or unverifiable state"
-                },
-                json!({
-                    "activeAfter": active_after,
-                    "success": cleanup_ok,
-                    "proofId": proof.proof_id,
-                }),
-            )?;
+                    "exited with an error"
+                };
+                emit_process_event(
+                    self,
+                    store,
+                    &record,
+                    "agent.finished",
+                    &format!("{label} agent {status}"),
+                    json!({
+                        "exitCode": outcome.exit_code,
+                        "cancelled": outcome.cancelled,
+                        "timedOut": outcome.timed_out,
+                    }),
+                )?;
+            } else {
+                emit_process_event(
+                    self,
+                    store,
+                    &record,
+                    "cleanup.failed",
+                    "Agent cleanup failed: survivors or unverifiable state",
+                    json!({
+                        "activeAfter": active_after,
+                        "proofId": proof.proof_id,
+                    }),
+                )?;
+            }
         }
 
         if !outcome.cleanup_ok || !outcome.zero_survivors {
@@ -322,11 +344,12 @@ impl ProcessHost {
         let mut n = 0u32;
         for live in lives.values() {
             if live.run_id == run_id {
-                live.cancel.store(true, Ordering::SeqCst);
+                // Set force first so the wait loop never enters a long grace window.
                 if forced {
                     live.force.store(true, Ordering::SeqCst);
                     let _ = live.spawned.job.terminate(1);
                 }
+                live.cancel.store(true, Ordering::SeqCst);
                 n += 1;
             }
         }
@@ -339,11 +362,11 @@ impl ProcessHost {
         };
         let mut n = 0u32;
         for live in lives.values() {
-            live.cancel.store(true, Ordering::SeqCst);
             if forced {
                 live.force.store(true, Ordering::SeqCst);
                 let _ = live.spawned.job.terminate(1);
             }
+            live.cancel.store(true, Ordering::SeqCst);
             n += 1;
         }
         n
@@ -405,23 +428,8 @@ impl ProcessHost {
         let mut exit_code = None;
 
         loop {
-            // Forward streamed agent lines to the durable event log + live sink.
-            while let Ok((stream, line)) = line_rx.try_recv() {
-                let redacted = redact_line(&line);
-                let event_type = if stream == "stderr" {
-                    "agent.stderr"
-                } else {
-                    "agent.stdout"
-                };
-                let _ = emit_process_event(
-                    self,
-                    store,
-                    record,
-                    event_type,
-                    &redacted,
-                    json!({ "stream": stream }),
-                );
-            }
+            // Drain streamed lines into capture buffers only — do not spam the activity log.
+            while let Ok((_stream, _line)) = line_rx.try_recv() {}
 
             if force.load(Ordering::SeqCst) {
                 killed = true;
@@ -430,11 +438,24 @@ impl ProcessHost {
                 record.stopped_at_utc = Some(chrono::Utc::now().to_rfc3339());
                 record.terminal_reason = Some("forced_abort".into());
                 let _ = store.upsert_process(record);
+                force_terminate_live(self, process_id);
+                let _ = child.kill();
                 break;
             }
             if cancel.load(Ordering::SeqCst) && !graceful_requested {
                 cancelled = true;
                 graceful_requested = true;
+                // UI Stop always forces; treat cancel as immediate kill (no multi-second grace).
+                if force.load(Ordering::SeqCst) {
+                    record.state = ProcessState::ForcedStop;
+                    record.terminal_reason = Some("forced_abort".into());
+                    record.stopped_at_utc = Some(chrono::Utc::now().to_rfc3339());
+                    let _ = store.upsert_process(record);
+                    force_terminate_live(self, process_id);
+                    let _ = child.kill();
+                    killed = true;
+                    break;
+                }
                 record.state = ProcessState::GracefulStop;
                 record.stopped_at_utc = Some(chrono::Utc::now().to_rfc3339());
                 record.terminal_reason = Some("cancelled".into());
@@ -443,13 +464,13 @@ impl ProcessHost {
                     self,
                     store,
                     record,
-                    "process.graceful_stop",
-                    "Graceful stop requested",
+                    "agent.stopping",
+                    "Stopping agent…",
                     json!({}),
                 );
-                // Cooperative: wait force_grace then kill job.
-                let grace_deadline =
-                    Instant::now() + Duration::from_millis(watchdog.force_grace_ms);
+                // Short grace only for non-forced cooperative cancel.
+                let grace_ms = watchdog.force_grace_ms.min(500);
+                let grace_deadline = Instant::now() + Duration::from_millis(grace_ms);
                 while Instant::now() < grace_deadline {
                     if let Ok(Some(status)) = child.try_wait() {
                         exit_code = status.code();
@@ -466,6 +487,7 @@ impl ProcessHost {
                     record.terminal_reason = Some("forced_after_grace".into());
                     let _ = store.upsert_process(record);
                     force_terminate_live(self, process_id);
+                    let _ = child.kill();
                 }
                 break;
             }
@@ -706,22 +728,17 @@ fn finalize_cleanup(
     });
     store.insert_cleanup_proof(&proof_closed)?;
 
-    let _ = emit_process_event(
-        host,
-        store,
-        record,
-        if zero {
-            "cleanup.succeeded"
-        } else {
-            "cleanup.failed"
-        },
-        if zero {
-            "Job Object reported zero active processes before handle close"
-        } else {
-            "Job Object still reported active processes"
-        },
-        json!({ "active": active_after }),
-    );
+    // Only surface cleanup failures in the activity log; success is covered by agent.finished.
+    if !zero {
+        let _ = emit_process_event(
+            host,
+            store,
+            record,
+            "cleanup.failed",
+            "Job Object still reported active processes after stop",
+            json!({ "active": active_after }),
+        );
+    }
 
     Ok((zero, active_after, proof_closed, cleanup_warning))
 }

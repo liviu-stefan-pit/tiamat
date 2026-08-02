@@ -174,6 +174,24 @@ export function Shell() {
   const onStop = useCallback(async () => {
     setStopping(true);
     setError(null);
+    // Optimistic: first press must feel instant even while kill is in flight.
+    setRunStatus((prev) =>
+      prev
+        ? {
+            ...prev,
+            status: "cancelling",
+            message: "Stopping…",
+          }
+        : {
+            runId: null,
+            status: "cancelling",
+            message: "Stopping…",
+            activeAttempts: 0,
+            completedPhases: 0,
+            totalPhases: 0,
+            managedRunRoot: null,
+          },
+    );
     try {
       const status = await cancelRun();
       setRunStatus(status);
@@ -207,9 +225,8 @@ export function Shell() {
     !stopping &&
     !isStoppableStatus(runStatus?.status);
 
-  // Stop stays available while starting or while a run is active — never locked by Run.
-  const canStop =
-    !stopping && (starting || isStoppableStatus(runStatus?.status));
+  // Stop stays available while starting/running — and remains clickable during stop to re-force.
+  const canStop = starting || isStoppableStatus(runStatus?.status);
 
   const cliState = cliConnectionState(capability, cliProbing);
 

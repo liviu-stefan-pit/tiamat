@@ -11,7 +11,7 @@ function makeEvents(count: number): EventEnvelope[] {
     sequence: index + 1,
     runId: "r1",
     phaseId: index % 2 === 0 ? "P01" : "P02",
-    type: index % 2 === 0 ? "phase.started" : "system.info",
+    type: index % 2 === 0 ? "phase.started" : "attempt.started",
     level: index % 5 === 0 ? ("warning" as const) : ("info" as const),
     timestampUtc: new Date(Date.UTC(2026, 7, 2, 9, 0, index)).toISOString(),
     message:

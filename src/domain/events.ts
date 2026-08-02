@@ -32,6 +32,48 @@ export const DEFAULT_EVENT_FILTER: EventFilter = {
   projectId: "",
 };
 
+/** Event types that drown the log without helping the operator. */
+const NOISE_TYPE_PREFIXES = [
+  "agent.stdout",
+  "agent.stderr",
+  "cleanup.proof",
+  "cleanup.succeeded",
+  "process.registered",
+  "process.spawned",
+  "process.active",
+  "process.graceful_stop",
+  "watchdog.",
+  "heartbeat.",
+] as const;
+
+export function isNoiseEvent(event: EventEnvelope): boolean {
+  const type = event.type.toLowerCase();
+  return NOISE_TYPE_PREFIXES.some(
+    (prefix) => type === prefix || type.startsWith(prefix),
+  );
+}
+
+/** Operator-facing log: agent lifecycle, run/plan/phase progress, errors. */
+export function isMeaningfulLogEvent(event: EventEnvelope): boolean {
+  if (isNoiseEvent(event)) return false;
+  if (event.level === "error" || event.level === "warning") return true;
+  const type = event.type.toLowerCase();
+  return (
+    type.startsWith("run.") ||
+    type.startsWith("plan.") ||
+    type.startsWith("workspace.") ||
+    type.startsWith("attempt.") ||
+    type.startsWith("phase.") ||
+    type.startsWith("agent.") ||
+    type.startsWith("intake.") ||
+    type.startsWith("test.") ||
+    type.startsWith("evidence.") ||
+    type === "cleanup.failed" ||
+    type.startsWith("process.association") ||
+    type.startsWith("process.forced")
+  );
+}
+
 export const EVENT_CATEGORIES: EventCategory[] = [
   "all",
   "run",
@@ -55,7 +97,11 @@ export function eventCategory(event: EventEnvelope): EventCategory {
   if (type.startsWith("test.") || type.startsWith("evidence.")) return "test";
   if (type.includes("stdout") || type.endsWith(".stdout")) return "stdout";
   if (type.includes("stderr") || type.endsWith(".stderr")) return "stderr";
-  if (type.startsWith("system.") || type.startsWith("cleanup.") || type.startsWith("watchdog.")) {
+  if (
+    type.startsWith("system.") ||
+    type.startsWith("cleanup.") ||
+    type.startsWith("watchdog.")
+  ) {
     return "system";
   }
   return "system";
@@ -64,14 +110,19 @@ export function eventCategory(event: EventEnvelope): EventCategory {
 export function filterEvents(
   events: EventEnvelope[],
   filter: EventFilter,
+  options?: { includeNoise?: boolean },
 ): EventEnvelope[] {
   const query = filter.query.trim().toLowerCase();
   const typePrefix = filter.typePrefix.trim().toLowerCase();
   const phaseId = filter.phaseId.trim().toLowerCase();
   const attemptId = filter.attemptId.trim().toLowerCase();
   const projectId = filter.projectId.trim().toLowerCase();
+  const includeNoise = options?.includeNoise ?? false;
 
   return events.filter((event) => {
+    if (!includeNoise && !isMeaningfulLogEvent(event)) {
+      return false;
+    }
     if (filter.level !== "all" && event.level !== filter.level) {
       return false;
     }
