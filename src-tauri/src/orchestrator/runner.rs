@@ -100,7 +100,7 @@ pub fn start_run(app: AppHandle, request: StartRunRequest) -> Result<StartRunRes
         .name(format!("tiamat-run-{run_id}"))
         .spawn(move || {
             if let Err(err) = run_supervisor(
-                app_for_thread,
+                app_for_thread.clone(),
                 run_id,
                 preflight,
                 output_dir,
@@ -109,6 +109,15 @@ pub fn start_run(app: AppHandle, request: StartRunRequest) -> Result<StartRunRes
                 cancel_for_thread,
             ) {
                 eprintln!("tiamat orchestrator failed: {err}");
+                let _ = set_run_status(&app_for_thread, run_id, "failed");
+                let _ = emit_run_event(
+                    &app_for_thread,
+                    run_id,
+                    "run.failed",
+                    EventLevel::Error,
+                    format!("Orchestrator failed: {err}"),
+                    serde_json::json!({ "runId": run_id, "error": err }),
+                );
             }
         })
         .map_err(|e| format!("failed to spawn orchestrator: {e}"))?;

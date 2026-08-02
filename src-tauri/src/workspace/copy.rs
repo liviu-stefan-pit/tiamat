@@ -135,4 +135,20 @@ mod tests {
         assert!(dest.join("app.js").exists());
         assert!(!dest.join("node_modules").exists());
     }
+
+    #[test]
+    fn guarded_copy_skips_nested_managed_run_dirs() {
+        let dir = tempdir().unwrap();
+        let src = dir.path().join("src");
+        let nested_run = src.join("run-26e49c28-c9e7-4b29-b5d0-2523eac6e44c");
+        fs::create_dir_all(nested_run.join("notes")).unwrap();
+        fs::write(src.join("plan.md"), "notes").unwrap();
+        fs::write(nested_run.join("notes").join("x.md"), "nested").unwrap();
+        let dest = dir.path().join("dest");
+        guarded_copy(&src, &dest, std::slice::from_ref(&src)).unwrap();
+        assert!(dest.join("plan.md").exists());
+        assert!(!dest
+            .join("run-26e49c28-c9e7-4b29-b5d0-2523eac6e44c")
+            .exists());
+    }
 }

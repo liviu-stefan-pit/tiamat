@@ -49,7 +49,26 @@ fn default_ignored_file_names() -> &'static HashSet<&'static str> {
 /// `.git` is ignored for file inventory but still used by repo detection.
 pub fn is_ignored_dir_name(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
-    default_ignored_dir_names().contains(lower.as_str())
+    if default_ignored_dir_names().contains(lower.as_str()) {
+        return true;
+    }
+    // Managed run workspaces created under an intake/output folder must never be
+    // re-copied (that nests run-*/notes/... forever until ENAMETOOLONG).
+    is_managed_run_dir_name(&lower)
+}
+
+/// True for Tiamat managed-run directory names (`run-<uuid>`).
+pub fn is_managed_run_dir_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    let Some(rest) = lower.strip_prefix("run-") else {
+        return false;
+    };
+    // UUID without braces: 8-4-4-4-12 hex + hyphens => 36 chars.
+    rest.len() == 36
+        && rest.as_bytes().iter().enumerate().all(|(i, b)| match i {
+            8 | 13 | 18 | 23 => *b == b'-',
+            _ => b.is_ascii_hexdigit(),
+        })
 }
 
 pub fn is_ignored_file_name(name: &str) -> bool {
@@ -76,6 +95,18 @@ mod tests {
         assert!(is_ignored_dir_name("node_modules"));
         assert!(is_ignored_dir_name("TARGET"));
         assert!(!is_ignored_dir_name("src"));
+    }
+
+    #[test]
+    fn ignores_managed_run_directories() {
+        assert!(is_ignored_dir_name(
+            "run-26e49c28-c9e7-4b29-b5d0-2523eac6e44c"
+        ));
+        assert!(is_managed_run_dir_name(
+            "run-26e49c28-c9e7-4b29-b5d0-2523eac6e44c"
+        ));
+        assert!(!is_ignored_dir_name("run-notes"));
+        assert!(!is_managed_run_dir_name("runtime"));
     }
 
     #[test]

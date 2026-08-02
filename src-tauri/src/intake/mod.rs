@@ -12,7 +12,7 @@ mod secrets;
 mod types;
 
 pub use error::{IntakeError, IntakeResult};
-pub use ignore::{is_ignored_dir_name, is_ignored_file_name};
+pub use ignore::{is_ignored_dir_name, is_ignored_file_name, is_managed_run_dir_name};
 pub use limits::IntakeLimits;
 pub use paths::{is_path_within_root, strip_verbatim_prefix};
 pub use preflight::{apply_trust, run_preflight, run_preflight_with_configured};
