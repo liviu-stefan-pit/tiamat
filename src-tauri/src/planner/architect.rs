@@ -160,6 +160,12 @@ pub fn run_architect_pipeline(req: ArchitectPipelineRequest<'_>) -> ArchitectRun
             if let Some(parent_chat) = parent_chat {
                 // One repair resume only.
                 evidence.push("repair_resume_started".into());
+                emit_architect_event(
+                    req.host.as_ref(),
+                    req.run_id,
+                    "plan.repair_started",
+                    "First plan was invalid; architect is repairing it (one retry)",
+                );
                 let repair = repair_prompt(&issues);
                 match invoke_and_validate(
                     &executable,
@@ -191,6 +197,12 @@ pub fn run_architect_pipeline(req: ArchitectPipelineRequest<'_>) -> ArchitectRun
             } else {
                 // No chat id yet — one fresh full-prompt retry (not --resume).
                 evidence.push("fresh_retry_without_chat_id".into());
+                emit_architect_event(
+                    req.host.as_ref(),
+                    req.run_id,
+                    "plan.repair_started",
+                    "First plan was invalid; architect is retrying once",
+                );
                 match invoke_and_validate(
                     &executable,
                     req.capability,
@@ -426,6 +438,7 @@ fn invoke_and_validate(
         &env,
         workspace_mount,
         resume_chat_id,
+        repaired,
     )
     .map_err(|e| vec![e])?;
     let parsed = parse_stream_json(&capture.stdout, &capture.stderr, &[]);
@@ -766,11 +779,17 @@ fn run_architect_hosted(
     env: &HashMap<String, String>,
     workspace_mount: &Path,
     resume_chat_hint: Option<&str>,
+    repaired: bool,
 ) -> Result<ProcessCapture, String> {
     let env_vec: Vec<(String, String)> = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let phase_id = if repaired {
+        "architect-repair"
+    } else {
+        "architect"
+    };
     let request = SpawnRequest {
         run_id,
-        phase_id: Some("architect".into()),
+        phase_id: Some(phase_id.into()),
         attempt_id: None,
         argv: argv.to_vec(),
         stdin: stdin.map(str::to_string),
@@ -794,6 +813,36 @@ fn run_architect_hosted(
             let ph = ProcessHost::new();
             run_capture_hosted(&store, &ph, request).map_err(|e| e.to_string())
         }
+    }
+}
+
+fn emit_architect_event(
+    host: Option<&HostedSpawnContext<'_>>,
+    run_id: Uuid,
+    event_type: &str,
+    message: &str,
+) {
+    let Some(ctx) = host else {
+        return;
+    };
+    if let Ok(envelope) = ctx.store.append_event_atomic(
+        None,
+        crate::db::NewEvent {
+            event_id: Uuid::new_v4(),
+            run_id,
+            project_id: None,
+            phase_id: Some("architect".into()),
+            attempt_id: None,
+            process_id: None,
+            event_type: event_type.into(),
+            level: tiamat_contracts::EventLevel::Info,
+            timestamp_utc: chrono::Utc::now(),
+            message: message.into(),
+            payload: serde_json::json!({ "runId": run_id }),
+        },
+    ) {
+        let _ = ctx.store.mark_outbox_delivered(&[envelope.event_id]);
+        ctx.host.publish_live(&envelope);
     }
 }
 

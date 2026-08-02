@@ -79,6 +79,11 @@ impl ProcessHost {
         }
     }
 
+    /// Publish an already-persisted event to the live UI bridge.
+    pub fn publish_live(&self, envelope: &tiamat_contracts::EventEnvelope) {
+        self.emit_live(envelope);
+    }
+
     pub fn active_live_count(&self) -> usize {
         self.lives.lock().map(|g| g.len()).unwrap_or(0)
     }
@@ -158,12 +163,10 @@ impl ProcessHost {
         let agent_label = record
             .phase_id
             .as_deref()
-            .map(|p| {
-                if p == "architect" {
-                    "Architect".to_string()
-                } else {
-                    format!("Phase {p}")
-                }
+            .map(|p| match p {
+                "architect" => "Architect".to_string(),
+                "architect-repair" => "Architect repair".to_string(),
+                other => format!("Phase {other}"),
             })
             .unwrap_or_else(|| "Agent".to_string());
         emit_process_event(
@@ -267,12 +270,10 @@ impl ProcessHost {
                 let label = record
                     .phase_id
                     .as_deref()
-                    .map(|p| {
-                        if p == "architect" {
-                            "Architect".to_string()
-                        } else {
-                            format!("Phase {p}")
-                        }
+                    .map(|p| match p {
+                        "architect" => "Architect".to_string(),
+                        "architect-repair" => "Architect repair".to_string(),
+                        other => format!("Phase {other}"),
                     })
                     .unwrap_or_else(|| "Agent".to_string());
                 let status = if outcome.cancelled {
