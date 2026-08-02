@@ -39,6 +39,8 @@ pub struct ArchitectPipelineRequest<'a> {
     pub capability: &'a CursorCapabilityReport,
     /// Optional override executable argv prefix for tests (e.g. node + fake-agent.mjs).
     pub executable_override: Option<&'a str>,
+    /// Test-only fake CLI mode (`TIAMAT_FAKE_CLI_MODE`); never set in production.
+    pub fake_cli_mode: Option<&'a str>,
     /// Production: AppState ProcessHost + Store. Tests may omit (ephemeral hosted).
     pub host: Option<HostedSpawnContext<'a>>,
 }
@@ -147,6 +149,7 @@ pub fn run_architect_pipeline(req: ArchitectPipelineRequest<'_>) -> ArchitectRun
         req.workspace,
         false,
         req.executable_override.is_some(),
+        req.fake_cli_mode,
         &mut attempts,
         &mut evidence,
         req.host.as_ref(),
@@ -169,6 +172,7 @@ pub fn run_architect_pipeline(req: ArchitectPipelineRequest<'_>) -> ArchitectRun
                     req.workspace,
                     true,
                     req.executable_override.is_some(),
+                    req.fake_cli_mode,
                     &mut attempts,
                     &mut evidence,
                     req.host.as_ref(),
@@ -198,6 +202,7 @@ pub fn run_architect_pipeline(req: ArchitectPipelineRequest<'_>) -> ArchitectRun
                     req.workspace,
                     true,
                     req.executable_override.is_some(),
+                    req.fake_cli_mode,
                     &mut attempts,
                     &mut evidence,
                     req.host.as_ref(),
@@ -312,6 +317,7 @@ fn invoke_and_validate(
     workspace: &RunWorkspaceManifest,
     repaired: bool,
     allow_fake_env: bool,
+    fake_cli_mode: Option<&str>,
     attempts: &mut Vec<ArchitectAttemptRecord>,
     evidence: &mut Vec<String>,
     host: Option<&HostedSpawnContext<'_>>,
@@ -356,6 +362,9 @@ fn invoke_and_validate(
         env.insert(k, v);
     }
     if allow_fake_env {
+        if let Some(mode) = fake_cli_mode {
+            env.insert("TIAMAT_FAKE_CLI_MODE".into(), mode.to_string());
+        }
         env.insert("TIAMAT_FAKE_PLAN_RUN_ID".into(), run_id.to_string());
         if let Some(project) = workspace.projects.first() {
             env.insert(

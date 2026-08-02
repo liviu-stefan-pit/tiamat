@@ -15,6 +15,7 @@
     "tauri:build": "tauri build",
     "test": "npm run test:rust && npm run test:frontend && npm run test:contracts",
     "test:rust": "cargo test --workspace",
+    "test:rust:linux": "xvfb-run -a cargo test --workspace",
     "test:frontend": "vitest run",
     "test:contracts": "cargo test -p tiamat-contracts",
     "test:e2e": "playwright test --config=e2e/playwright.config.ts",
@@ -34,7 +35,7 @@
     "lint:frontend": "tsc --noEmit",
     "setup": "node scripts/setup.mjs",
     "version": "node scripts/version.mjs",
-    "ci": "npm run fmt:rust -- --check && npm run lint && npm test && npm run test:docs"
+    "ci": "npm run fmt:rust -- --check && npm run lint && npm run build && npm test && npm run test:docs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

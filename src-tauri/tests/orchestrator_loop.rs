@@ -23,6 +23,12 @@ use uuid::Uuid;
 
 static GIT_LOCK: Mutex<()> = Mutex::new(());
 
+fn lock_fixtures() -> std::sync::MutexGuard<'static, ()> {
+    GIT_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -86,7 +92,7 @@ fn models() -> Vec<CursorModelInfo> {
 
 #[test]
 fn tick_execute_phase_complete_attempt_passes() {
-    let _lock = GIT_LOCK.lock().unwrap();
+    let _lock = lock_fixtures();
     let dir = tempdir().unwrap();
     let store = Store::open_in_memory(dir.path()).unwrap();
     let run_id = Uuid::new_v4();

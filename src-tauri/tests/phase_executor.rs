@@ -35,6 +35,12 @@ fn executor_app_dir() -> PathBuf {
 
 static GIT_LOCK: Mutex<()> = Mutex::new(());
 
+fn lock_fixtures() -> std::sync::MutexGuard<'static, ()> {
+    GIT_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 fn probe_fake() -> CursorCapabilityReport {
     invalidate_probe_cache();
     let js = fake_agent_js();
@@ -210,7 +216,7 @@ fn unit_decisions_prompt_recovery_and_result() {
 
 #[test]
 fn fixture_success_checkpoints_only_after_all_three_gates() {
-    let _lock = GIT_LOCK.lock().unwrap();
+    let _lock = lock_fixtures();
     let dir = tempfile::tempdir().unwrap();
     let run_id = Uuid::new_v4();
     let (_preflight, mut workspace) = materialize_executor_app(run_id, dir.path());
@@ -267,7 +273,7 @@ fn fixture_success_checkpoints_only_after_all_three_gates() {
 
 #[test]
 fn fixture_failed_tests_prevent_checkpoint() {
-    let _lock = GIT_LOCK.lock().unwrap();
+    let _lock = lock_fixtures();
     let dir = tempfile::tempdir().unwrap();
     let run_id = Uuid::new_v4();
     let (_preflight, mut workspace) = materialize_executor_app(run_id, dir.path());
@@ -318,7 +324,7 @@ fn fixture_failed_tests_prevent_checkpoint() {
 
 #[test]
 fn fixture_escape_quarantines_without_pass() {
-    let _lock = GIT_LOCK.lock().unwrap();
+    let _lock = lock_fixtures();
     let dir = tempfile::tempdir().unwrap();
     let run_id = Uuid::new_v4();
     let (_preflight, mut workspace) = materialize_executor_app(run_id, dir.path());
@@ -361,7 +367,7 @@ fn fixture_escape_quarantines_without_pass() {
 
 #[test]
 fn fixture_timeout_partial_resume_or_rollback() {
-    let _lock = GIT_LOCK.lock().unwrap();
+    let _lock = lock_fixtures();
     let dir = tempfile::tempdir().unwrap();
     let run_id = Uuid::new_v4();
     let (_preflight, mut workspace) = materialize_executor_app(run_id, dir.path());

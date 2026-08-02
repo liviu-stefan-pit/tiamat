@@ -145,14 +145,15 @@ fn architect_valid_plan_persists_atomic_artifacts_and_graph() {
     let run_id = Uuid::new_v4();
     let (preflight, mut workspace) = materialize_rough_spec(run_id, parent.path());
     let capability = probe_fake("architect_valid");
-    std::env::set_var("TIAMAT_FAKE_CLI_MODE", "architect_valid");
+    let exe = format!("node|{}", fake_agent_js().display());
 
     let result = run_architect_pipeline(ArchitectPipelineRequest {
         run_id,
         preflight: &preflight,
         workspace: &mut workspace,
         capability: &capability,
-        executable_override: Some(&format!("node|{}", fake_agent_js().display())),
+        executable_override: Some(&exe),
+        fake_cli_mode: Some("architect_valid"),
         host: None,
     });
     assert!(result.ok, "{:?}", result.error);
@@ -181,7 +182,6 @@ fn architect_valid_plan_persists_atomic_artifacts_and_graph() {
 
     // Architect attempt must prove cannot-implement.
     assert!(result.attempts.iter().all(|a| a.proof.cannot_implement()));
-    std::env::remove_var("TIAMAT_FAKE_CLI_MODE");
 }
 
 #[test]
@@ -191,14 +191,15 @@ fn architect_invalid_fails_after_one_repair_with_evidence() {
     let run_id = Uuid::new_v4();
     let (preflight, mut workspace) = materialize_rough_spec(run_id, parent.path());
     let capability = probe_fake("architect_invalid");
-    std::env::set_var("TIAMAT_FAKE_CLI_MODE", "architect_invalid");
+    let exe = format!("node|{}", fake_agent_js().display());
 
     let result = run_architect_pipeline(ArchitectPipelineRequest {
         run_id,
         preflight: &preflight,
         workspace: &mut workspace,
         capability: &capability,
-        executable_override: Some(&format!("node|{}", fake_agent_js().display())),
+        executable_override: Some(&exe),
+        fake_cli_mode: Some("architect_invalid"),
         host: None,
     });
     assert!(!result.ok);
@@ -208,7 +209,6 @@ fn architect_invalid_fails_after_one_repair_with_evidence() {
     assert!(result.attempts[1].repaired);
     assert!(result.attempts.iter().all(|a| a.proof.cannot_implement()));
     assert!(result.plan.is_none());
-    std::env::remove_var("TIAMAT_FAKE_CLI_MODE");
 }
 
 #[test]
@@ -218,14 +218,15 @@ fn architect_repairable_succeeds_on_resume() {
     let run_id = Uuid::new_v4();
     let (preflight, mut workspace) = materialize_rough_spec(run_id, parent.path());
     let capability = probe_fake("architect_repairable");
-    std::env::set_var("TIAMAT_FAKE_CLI_MODE", "architect_repairable");
+    let exe = format!("node|{}", fake_agent_js().display());
 
     let result = run_architect_pipeline(ArchitectPipelineRequest {
         run_id,
         preflight: &preflight,
         workspace: &mut workspace,
         capability: &capability,
-        executable_override: Some(&format!("node|{}", fake_agent_js().display())),
+        executable_override: Some(&exe),
+        fake_cli_mode: Some("architect_repairable"),
         host: None,
     });
     assert!(result.ok, "{:?}", result.error);
@@ -234,7 +235,6 @@ fn architect_repairable_succeeds_on_resume() {
     assert!(result.attempts[1].repaired);
     assert!(result.plan.is_some());
     assert!(result.evidence.iter().any(|e| e.contains("repair_resume")));
-    std::env::remove_var("TIAMAT_FAKE_CLI_MODE");
 }
 
 #[test]
@@ -244,14 +244,15 @@ fn architect_succeeds_without_sol_using_preferred_grok() {
     let run_id = Uuid::new_v4();
     let (preflight, mut workspace) = materialize_rough_spec(run_id, parent.path());
     let capability = probe_fake("architect_no_sol");
-    std::env::set_var("TIAMAT_FAKE_CLI_MODE", "architect_no_sol");
+    let exe = format!("node|{}", fake_agent_js().display());
 
     let result = run_architect_pipeline(ArchitectPipelineRequest {
         run_id,
         preflight: &preflight,
         workspace: &mut workspace,
         capability: &capability,
-        executable_override: Some(&format!("node|{}", fake_agent_js().display())),
+        executable_override: Some(&exe),
+        fake_cli_mode: Some("architect_no_sol"),
         host: None,
     });
     // Architect prefers Cursor Grok High; missing SOL is not degraded mode.
@@ -262,5 +263,4 @@ fn architect_succeeds_without_sol_using_preferred_grok() {
         ARCHITECT_PREFERRED_MODEL
     );
     assert_eq!(ARCHITECT_FALLBACK_MODEL, ARCHITECT_PREFERRED_MODEL);
-    std::env::remove_var("TIAMAT_FAKE_CLI_MODE");
 }

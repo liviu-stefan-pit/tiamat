@@ -32,23 +32,30 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: "./src-tauri -> target"
+          # Workspace Cargo.toml lives at repo root; artifacts go to ./target.
+          workspaces: ". -> target"
 
-      - name: Linux WebKit dependencies
+      - name: Linux WebKit + display dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           # Ubuntu 24.04: Ayatana only (libappindicator3-dev conflicts).
+          # xvfb is required so the Tauri desktop launch smoke can open a GTK window.
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf \
             libgtk-3-dev \
-            xdg-utils
+            xdg-utils \
+            xvfb
 
       - name: Install npm dependencies
         run: npm ci
+
+      - name: Build frontend assets
+        # Tauri embeds ../dist at compile time; build before cargo test/clippy.
+        run: npm run build
 
       - name: Install Playwright Chromium
         run: |
@@ -66,7 +73,13 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Rust tests (workspace)
-        run: cargo test --workspace
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            xvfb-run -a cargo test --workspace
+          else
+            cargo test --workspace
+          fi
 
       - name: TypeScript check
         run: npm run lint:frontend

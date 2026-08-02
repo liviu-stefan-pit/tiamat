@@ -299,6 +299,7 @@ fn run_supervisor(
             workspace: &mut workspace,
             capability: &capability,
             executable_override: None,
+            fake_cli_mode: None,
             host: Some(HostedSpawnContext {
                 store: &store,
                 host: &state.process_host,

@@ -720,6 +720,7 @@ pub fn run_architect_pipeline(
         workspace: &mut workspace,
         capability: &capability,
         executable_override: None,
+        fake_cli_mode: None,
         host: Some(crate::process::HostedSpawnContext {
             store: &store,
             host: &state.process_host,
