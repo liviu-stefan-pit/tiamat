@@ -4,6 +4,7 @@ import {
   DEFAULT_EVENT_FILTER,
   eventCategory,
   exportFilteredEventsJson,
+  exportFilteredEventsTxt,
   filterEvents,
   truncateMessage,
 } from "./events";
@@ -133,5 +134,15 @@ describe("filterEvents", () => {
     });
     expect(json).toContain("test.unit.passed");
     expect(json).not.toContain("phase.started");
+  });
+
+  it("exports filtered txt with full messages", () => {
+    const txt = exportFilteredEventsTxt(events, {
+      ...DEFAULT_EVENT_FILTER,
+      category: "test",
+    });
+    expect(txt).toContain("Tiamat activity log");
+    expect(txt).toContain("test.unit.passed");
+    expect(txt).not.toContain("phase.started");
   });
 });

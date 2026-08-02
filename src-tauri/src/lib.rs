@@ -219,6 +219,7 @@ pub fn run() {
             commands::seed_perf_events,
             commands::emit_event_burst,
             commands::export_run_report,
+            commands::export_activity_log,
             commands::scheduler_retry_phase,
             commands::open_run_output,
             commands::run_startup_recovery,

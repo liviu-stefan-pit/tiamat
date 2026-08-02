@@ -1,11 +1,13 @@
 import type { EventEnvelope } from "../../domain/contracts";
 import {
   DEFAULT_EVENT_FILTER,
-  exportFilteredEventsJson,
+  exportFilteredEventsTxt,
   filterEvents,
   truncateMessage,
   type EventFilter,
 } from "../../domain/events";
+import { exportActivityLog } from "../../lib/tauri/commands";
+import { isTauriRuntime } from "../../lib/tauri/runtime";
 import { useEffect, useMemo, useRef, useState } from "react";
 import "./ActivityLog.css";
 
@@ -21,6 +23,7 @@ const MAX_MOUNTED_ROWS = 64;
 
 export function ActivityLog({ events, statusLine }: ActivityLogProps) {
   const [filter, setFilter] = useState<EventFilter>(DEFAULT_EVENT_FILTER);
+  const [exportError, setExportError] = useState<string | null>(null);
   const visible = useMemo(() => filterEvents(events, filter), [events, filter]);
   const [follow, setFollow] = useState(true);
   const [windowStart, setWindowStart] = useState(0);
@@ -60,14 +63,28 @@ export function ActivityLog({ events, statusLine }: ActivityLogProps) {
 
   const mounted = visible.slice(windowStart, windowStart + windowSize);
 
-  function onExport() {
-    const blob = new Blob([exportFilteredEventsJson(events, filter)], {
-      type: "application/json",
-    });
+  async function onExport() {
+    setExportError(null);
+    const text = exportFilteredEventsTxt(events, filter);
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const fileName = `tiamat-log-${stamp}.txt`;
+    if (isTauriRuntime()) {
+      try {
+        const result = await exportActivityLog(text, fileName);
+        if (result.cancelled) {
+          setExportError("Export cancelled");
+        }
+      } catch (err) {
+        setExportError(err instanceof Error ? err.message : String(err));
+      }
+      return;
+    }
+    // Browser / vitest fallback.
+    const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "tiamat-log.json";
+    a.download = fileName;
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -80,6 +97,11 @@ export function ActivityLog({ events, statusLine }: ActivityLogProps) {
           {statusLine && (
             <p className="status-line" data-testid="run-status-line">
               {statusLine}
+            </p>
+          )}
+          {exportError && (
+            <p className="status-line" data-testid="log-export-status">
+              {exportError}
             </p>
           )}
         </div>
@@ -110,7 +132,7 @@ export function ActivityLog({ events, statusLine }: ActivityLogProps) {
           <button type="button" onClick={() => setFollow(true)}>
             Follow
           </button>
-          <button type="button" data-testid="log-export" onClick={onExport}>
+          <button type="button" data-testid="log-export" onClick={() => void onExport()}>
             Export
           </button>
           <span data-testid="log-count">{visible.length}</span>

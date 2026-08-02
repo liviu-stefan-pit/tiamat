@@ -1795,6 +1795,24 @@ export async function browserInvoke<T>(
         relativePath: "reports/run-report.json",
       } as T;
     }
+    case "export_activity_log": {
+      const content = String(args?.content ?? "");
+      for (const secret of [
+        "AKIAIOSFODNN7EXAMPLE",
+        "fixture-secret-value",
+        "fixture-secret-value-do-not-leak",
+        "demo-api-key-should-redact",
+      ]) {
+        if (content.includes(secret)) {
+          throw new Error(`refusing export: fixture secret would leak (${secret})`);
+        }
+      }
+      return {
+        path: `/tmp/${String(args?.defaultFileName ?? "tiamat-log.txt")}`,
+        cancelled: false,
+        byteSize: content.length,
+      } as T;
+    }
     case "scheduler_retry_phase": {
       const state = ensureDemoState();
       if (!state.scheduler) throw new Error("scheduler not started");

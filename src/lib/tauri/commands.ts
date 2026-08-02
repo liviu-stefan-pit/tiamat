@@ -479,6 +479,22 @@ export async function exportRunReport(
   return invokeCommand("export_run_report", { runId });
 }
 
+export interface ExportActivityLogResult {
+  path: string | null;
+  cancelled: boolean;
+  byteSize: number;
+}
+
+export async function exportActivityLog(
+  content: string,
+  defaultFileName?: string,
+): Promise<ExportActivityLogResult> {
+  return invokeCommand("export_activity_log", {
+    content,
+    defaultFileName: defaultFileName ?? null,
+  });
+}
+
 export async function schedulerRetryPhase(
   runId: string,
   phaseId?: string,

@@ -199,3 +199,26 @@ export function exportFilteredEventsJson(
     2,
   );
 }
+
+/** Human-readable full log export (not truncated UI rows). */
+export function exportFilteredEventsTxt(
+  events: EventEnvelope[],
+  filter: EventFilter,
+): string {
+  const filtered = filterEvents(events, filter);
+  const lines: string[] = [
+    `Tiamat activity log`,
+    `exportedAtUtc: ${new Date().toISOString()}`,
+    `filter.level: ${filter.level}`,
+    `filter.query: ${filter.query || "(none)"}`,
+    `count: ${filtered.length}`,
+    "",
+  ];
+  for (const event of filtered) {
+    lines.push(
+      `${event.sequence}\t${event.timestampUtc}\t${event.level}\t${event.type}\t${event.message}`,
+    );
+  }
+  lines.push("");
+  return lines.join("\n");
+}
