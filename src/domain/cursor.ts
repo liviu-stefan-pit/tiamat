@@ -86,6 +86,76 @@ export function formatCursorStatus(report: CursorCapabilityReport | null): strin
   return `${report.status}${version}${auth}`;
 }
 
+/** Compact connection state for the shell status light. */
+export type CliConnectionKind =
+  | "checking"
+  | "connected"
+  | "auth_needed"
+  | "disconnected";
+
+export interface CliConnectionState {
+  kind: CliConnectionKind;
+  label: string;
+  detail: string;
+}
+
+export function cliConnectionState(
+  report: CursorCapabilityReport | null,
+  probing = false,
+): CliConnectionState {
+  if (probing && !report) {
+    return {
+      kind: "checking",
+      label: "Checking CLI…",
+      detail: "Probing Cursor agent CLI",
+    };
+  }
+  if (!report) {
+    return {
+      kind: "disconnected",
+      label: "CLI unknown",
+      detail: "Cursor CLI has not been probed yet",
+    };
+  }
+  if (report.status !== "available") {
+    return {
+      kind: "disconnected",
+      label: "CLI offline",
+      detail: report.message || `Cursor CLI status: ${report.status}`,
+    };
+  }
+  if (!report.features.modePlan) {
+    return {
+      kind: "disconnected",
+      label: "CLI incomplete",
+      detail:
+        report.executable
+          ? `${report.executable} does not advertise plan mode`
+          : "Cursor CLI does not advertise plan mode",
+    };
+  }
+  if (report.auth === "unauthenticated" || report.auth === "error") {
+    return {
+      kind: "auth_needed",
+      label: "CLI needs login",
+      detail:
+        report.authMessage ||
+        "Run `agent login`, then click the status light to re-check",
+    };
+  }
+  return {
+    kind: "connected",
+    label: "CLI connected",
+    detail: [
+      report.executable,
+      report.version ? `v${report.version}` : null,
+      report.auth === "ready" ? "auth ready" : null,
+    ]
+      .filter(Boolean)
+      .join(" · "),
+  };
+}
+
 export function hasNoninteractiveApproval(features: CursorFeatureFlags): boolean {
   return features.force || features.autoReview;
 }
