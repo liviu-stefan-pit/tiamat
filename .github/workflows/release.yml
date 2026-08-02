@@ -1,28 +1,81 @@
 name: Release
 
+# Push a version tag (e.g. v0.1.0) to build Windows + Linux installers and
+# attach them to one GitHub Release automatically.
 on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build/publish (e.g. v0.1.0)"
+        required: true
+        type: string
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create.outputs.id }}
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - name: Resolve tag
+        id: meta
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "Tag must look like v0.1.0 (got: $TAG)" >&2
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Create or reuse release
+        id: create
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: Tiamat ${{ steps.meta.outputs.tag }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          body: |
+            Desktop packages for **Windows** and **Linux**.
+
+            Install, then ensure the Cursor `agent` CLI is on your PATH and signed in before running live builds.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   build:
-    name: Build (${{ matrix.os }})
+    name: Build (${{ matrix.platform }})
+    needs: create-release
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
-            platform: windows
-          - os: ubuntu-24.04
-            platform: linux
-    runs-on: ${{ matrix.os }}
+          - platform: windows-latest
+            os_name: windows
+          - platform: ubuntu-24.04
+            os_name: linux
+    runs-on: ${{ matrix.platform }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.create-release.outputs.tag }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -33,32 +86,36 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+          key: release-${{ matrix.os_name }}
+
       - name: Linux WebKit dependencies
-        if: matrix.platform == 'linux'
+        if: matrix.os_name == 'linux'
         run: |
           sudo apt-get update
-          # Ubuntu 24.04: use Ayatana only — libappindicator3-dev conflicts with it.
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf \
-            libgtk-3-dev
+            libgtk-3-dev \
+            libfuse2 \
+            xdg-utils \
+            file
 
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Build Tauri packages
-        uses: tauri-apps/tauri-action@v0
+      - name: Build and upload Tauri packages
+        uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: Tiamat ${{ github.ref_name }}
-          releaseBody: |
-            Cross-platform release for ${{ github.ref_name }}.
-
-            Verify SHA-256 sums in the release assets / PACKAGE-HASHES when published.
+          releaseId: ${{ needs.create-release.outputs.release_id }}
           releaseDraft: false
           prerelease: false
-          args: --config src-tauri/tauri.conf.json
+          # Empty args: use tauri.conf.json bundle.targets (nsis/msi/deb/appimage).
+          args: ""

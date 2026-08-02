@@ -90,7 +90,7 @@ pub fn query_start_time(pid: u32) -> Option<u64> {
     rest.split_whitespace().nth(19)?.parse::<u64>().ok()
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(windows, unix)))]
 pub fn query_start_time(_pid: u32) -> Option<u64> {
     None
 }

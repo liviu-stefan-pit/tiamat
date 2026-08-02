@@ -150,7 +150,7 @@ pub fn cancel_active_run(app: &AppHandle) -> Result<RunStatusSnapshot, String> {
     let _ = store.set_run_status(run_id, "cancelling");
     state.process_host.cancel_all_for_run(run_id, false);
 
-    Ok(snapshot_from_store(&store, run_id, &state)?)
+    snapshot_from_store(&store, run_id, &state)
 }
 
 pub fn get_run_status(app: &AppHandle) -> Result<RunStatusSnapshot, String> {
@@ -165,7 +165,7 @@ pub fn get_run_status(app: &AppHandle) -> Result<RunStatusSnapshot, String> {
     }
     // Fall back to the most recent non-terminal or latest run.
     let runs = store.list_runs().map_err(|e| e.to_string())?;
-    if let Some(run) = runs.into_iter().rev().next() {
+    if let Some(run) = runs.into_iter().next_back() {
         return snapshot_from_store(&store, run.run_id, &state);
     }
     Ok(RunStatusSnapshot {

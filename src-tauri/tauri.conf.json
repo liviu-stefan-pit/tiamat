@@ -25,7 +25,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis", "msi", "deb", "appimage"],
     "createUpdaterArtifacts": false,
     "icon": [
       "icons/32x32.png",
@@ -67,6 +67,6 @@
     },
     "publisher": "Tiamat",
     "shortDescription": "Turn rough project material into tested implementations",
-    "longDescription": "Tiamat orchestrates Cursor CLI agents on Windows with isolated workspaces, structured verification, and deterministic process cleanup. Uninstall retains unpromoted managed workspaces."
+    "longDescription": "Tiamat orchestrates Cursor CLI agents on Windows and Linux with isolated workspaces, structured verification, and deterministic process cleanup."
   }
 }

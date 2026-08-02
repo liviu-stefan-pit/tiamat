@@ -2,40 +2,42 @@
 
 ## Version source of truth
 
-Keep these aligned at **0.1.0** for the P11/P12 candidate:
+Keep these aligned (use `npm run version -- X.Y.Z`):
 
 - `package.json` → `version`
 - `src-tauri/tauri.conf.json` → `version`
-- `Cargo.toml` workspace package version
+- root `Cargo.toml` → `[workspace.package].version`
 - `CHANGELOG.md`
-- `docs/release/PACKAGE-HASHES.md`
+- `docs/release/PACKAGE-HASHES.md` (after you stage packages)
+
+## Automatic GitHub Release (Windows + Linux)
+
+1. Bump version and commit on `main`.
+2. Tag and push:
+
+```bash
+git tag v0.1.0
+git push origin main --tags
+```
+
+3. Workflow [`.github/workflows/release.yml`](../../.github/workflows/release.yml):
+   - Creates (or reuses) a GitHub Release for that tag
+   - Builds on `windows-latest` and `ubuntu-24.04`
+   - Uploads NSIS, MSI, deb, and AppImage assets to the same release
+
+Re-run from **Actions → Release → Run workflow** with the tag name if a platform job failed.
+
+Repo setting required: **Settings → Actions → General → Workflow permissions → Read and write permissions** (so `GITHUB_TOKEN` can create releases).
+
+## Local packaging
+
+```bash
+npm run package
+npm run test:docs
+```
+
+Stages installers under `artifacts/packages/` with SHA-256 sums. Windows VM matrix helpers remain under `scripts/vm/`.
 
 ## Prep checklist
 
-Follow [../release/CHECKLIST.md](../release/CHECKLIST.md). Produce:
-
-1. Changelog entry for the version.
-2. Dependency license report.
-3. Vulnerability scan disposition.
-4. Signing disposition.
-5. Package hashes matching staged installers.
-6. Docs validation (`npm run test:docs`) and new-user E2E.
-7. P12 handoff checkpoint (`P12-RELEASE-PREP.md`).
-
-## Commands
-
-```powershell
-npm run package
-npm run test:docs
-npm run test:all
-npm run test:packaged
-npm run test:cleanup-proof
-# Local-live release gate only:
-npm run test:canary
-```
-
-## Traceability
-
-Release-prep artifacts must cite the candidate package hashes from P11 (`P11-RELEASE-CANDIDATE.md`) unless packages are rebuilt; if rebuilt, regenerate hashes and update both the release docs and MASTER-PLAN evidence.
-
-P13 owns independent review and final release handoff after this prep is exact.
+Follow [../release/CHECKLIST.md](../release/CHECKLIST.md) for changelog, licenses, signing disposition, and hashes when cutting a formal candidate.

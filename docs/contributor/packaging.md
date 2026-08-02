@@ -2,7 +2,12 @@
 
 ## Targets
 
-Configured in `src-tauri/tauri.conf.json` with `"targets": "all"` (platform-native bundles). Product version `0.1.0`, identifier `com.tiamat.desktop`.
+Configured in `src-tauri/tauri.conf.json`:
+
+- Windows: `nsis`, `msi`
+- Linux: `deb`, `appimage`
+
+Product version from `tauri.conf.json` / workspace Cargo version; identifier `com.tiamat.desktop`.
 
 ```bash
 npm run package
@@ -10,17 +15,21 @@ npm run package
 
 Runs `scripts/package.mjs`: `tauri build`, then stages installers and SHA-256 sums under `artifacts/packages/`. Signing disposition defaults to `unsigned-dev`.
 
-Windows: NSIS + MSI. Linux: AppImage / deb (and rpm when enabled by the host toolchain).
-
 ## GitHub Releases
 
-Pushing a `v*` tag runs `.github/workflows/release.yml` on `windows-latest` and `ubuntu-24.04`, attaching both platforms' artifacts to one GitHub Release via `tauri-apps/tauri-action`.
+Pushing a `v*` tag (for example `v0.1.0`) runs `.github/workflows/release.yml`:
+
+1. Creates a GitHub Release for the tag
+2. Builds on Windows and Ubuntu 24.04 in parallel
+3. Uploads all platform artifacts into that one release
 
 Bump versions with:
 
 ```bash
 npm run version -- 0.2.0
 ```
+
+Then commit, tag `v0.2.0`, and push with tags.
 
 ## Install / upgrade / uninstall policy
 

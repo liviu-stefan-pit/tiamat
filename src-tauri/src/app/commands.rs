@@ -1933,11 +1933,7 @@ fn emit_scheduler_event(
     // then the latest run — never silently pick an arbitrary first row.
     let run_id = {
         let orch = state.orchestrator.lock().map_err(|e| e.to_string())?;
-        if let Some(handle) = orch.as_ref() {
-            Some(handle.run_id())
-        } else {
-            None
-        }
+        orch.as_ref().map(|handle| handle.run_id())
     };
     let run_id = if let Some(id) = run_id {
         id

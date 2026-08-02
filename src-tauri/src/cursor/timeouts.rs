@@ -72,11 +72,7 @@ mod tests {
         assert_eq!(parse_env_ms("__TIAMAT_NEVER_SET__"), None);
         // Direct unit of the helper: floor at 1s.
         assert_eq!(
-            {
-                // Re-implement tiny floor check against the pure parser path.
-                let ms = "50".parse::<u64>().ok().map(|v| v.max(1_000));
-                ms
-            },
+            "50".parse::<u64>().ok().map(|v| v.max(1_000)),
             Some(1_000)
         );
     }

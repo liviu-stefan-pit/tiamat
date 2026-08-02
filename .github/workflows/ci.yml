@@ -29,23 +29,35 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
       - name: Linux WebKit dependencies
-        if: runner.os == 'Linux'
+        if: runner.os == "Linux"
         run: |
           sudo apt-get update
-          # Ubuntu 24.04: use Ayatana only — libappindicator3-dev conflicts with it.
+          # Ubuntu 24.04: Ayatana only (libappindicator3-dev conflicts).
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf \
-            libgtk-3-dev
+            libgtk-3-dev \
+            xdg-utils
 
-      - name: Install dependencies
+      - name: Install npm dependencies
         run: npm ci
 
       - name: Install Playwright Chromium
-        run: npx playwright install chromium --with-deps
+        run: |
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            npx playwright install chromium --with-deps
+          else
+            npx playwright install chromium
+          fi
+        shell: bash
 
       - name: Rust format check
         run: cargo fmt --all --check
