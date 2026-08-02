@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
+use super::probe::normalize_model_id;
 use super::redaction::{quote_windows_command, redact_argv, redact_text_secrets};
 use super::types::{
     BuiltCursorCommand, CursorCommandPreview, CursorFeatureFlags, CursorInvokeRequest,
@@ -104,7 +105,7 @@ pub fn build_cursor_command(
         if let Some(model) = request
             .model
             .as_deref()
-            .map(str::trim)
+            .map(normalize_model_id)
             .filter(|s| !s.is_empty())
         {
             argv.push("--model".into());
@@ -290,6 +291,26 @@ mod tests {
         assert_eq!(built.stdin, "continue");
         // Never a single shell-concatenated command string for execution.
         assert!(built.argv.len() > 1);
+    }
+
+    #[test]
+    fn normalizes_polluted_model_id_before_argv() {
+        let dir = tempdir().unwrap();
+        let request = CursorInvokeRequest {
+            workspace: dir.path().display().to_string(),
+            model: Some("cursor-grok-4.5-high - Cursor Grok 4.5".into()),
+            prompt: "plan".into(),
+            ..CursorInvokeRequest::default()
+        };
+        let built = build_cursor_command("agent", &full_features(), &request, None).unwrap();
+        assert!(built
+            .argv
+            .windows(2)
+            .any(|w| w == ["--model", "cursor-grok-4.5-high"]));
+        assert!(!built
+            .argv
+            .iter()
+            .any(|a| a.contains("Cursor Grok")));
     }
 
     #[test]

@@ -337,27 +337,61 @@ pub fn list_models_for_executable(
     })
 }
 
+/// Strip a trailing ` - Display Name` suffix from a `--list-models` line or
+/// polluted catalog id so only the bare slug is passed to `--model`.
+pub fn normalize_model_id(raw: &str) -> &str {
+    let trimmed = raw.trim();
+    if let Some((id, _)) = trimmed.split_once(" - ") {
+        let id = id.trim();
+        if !id.is_empty() && !id.contains(char::is_whitespace) {
+            return id;
+        }
+    }
+    trimmed
+}
+
 pub fn parse_models_output(stdout: &str) -> Vec<CursorModelInfo> {
     let mut models = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for line in stdout.lines() {
-        let id = line.trim();
-        if id.is_empty() || id.eq_ignore_ascii_case("auto") {
+        let raw = line.trim();
+        if raw.is_empty() || raw.eq_ignore_ascii_case("auto") {
             continue;
         }
-        // Skip help-ish lines.
-        if (id.starts_with('-') || (id.contains(' ') && !id.contains('/')))
-            && !id.contains("composer")
-            && !id.contains("grok")
-            && !id.contains("gpt")
+        // Skip help-ish lines (before splitting display format).
+        if (raw.starts_with('-') || (raw.contains(' ') && !raw.contains('/')))
+            && !raw.contains("composer")
+            && !raw.contains("grok")
+            && !raw.contains("gpt")
+            && !raw.contains("claude")
+            && !raw.contains("kimi")
         {
             continue;
         }
+
+        let (id, label) = if let Some((left, right)) = raw.split_once(" - ") {
+            let id = left.trim();
+            let label = right.trim();
+            if id.is_empty() || id.contains(char::is_whitespace) {
+                (normalize_model_id(raw), raw)
+            } else if label.is_empty() {
+                (id, id)
+            } else {
+                (id, label)
+            }
+        } else {
+            (raw, raw)
+        };
+
+        if id.is_empty() || id.eq_ignore_ascii_case("auto") {
+            continue;
+        }
+
         let key = id.to_ascii_lowercase();
         if seen.insert(key) {
             models.push(CursorModelInfo {
                 id: id.to_string(),
-                label: id.to_string(),
+                label: label.to_string(),
             });
         }
     }
@@ -454,5 +488,64 @@ Usage: agent [options]
         assert!(report.features.stream_json);
         assert_eq!(report.auth, CursorAuthStatus::Ready);
         assert!(report.models.iter().any(|m| m.id == "composer-2.5"));
+    }
+
+    #[test]
+    fn normalize_model_id_strips_display_suffix() {
+        assert_eq!(
+            normalize_model_id("cursor-grok-4.5-high - Cursor Grok 4.5"),
+            "cursor-grok-4.5-high"
+        );
+        assert_eq!(normalize_model_id("  gpt-5.6-sol-high  "), "gpt-5.6-sol-high");
+        assert_eq!(
+            normalize_model_id("composer-2.5 - Composer 2.5"),
+            "composer-2.5"
+        );
+    }
+
+    #[test]
+    fn parse_models_output_splits_id_and_display_label() {
+        let models = parse_models_output(
+            "\
+cursor-grok-4.5-high - Cursor Grok 4.5
+gpt-5.6-sol-high - GPT 5.6 Sol High
+composer-2.5
+auto
+Available models:
+",
+        );
+        assert_eq!(
+            models,
+            vec![
+                CursorModelInfo {
+                    id: "cursor-grok-4.5-high".into(),
+                    label: "Cursor Grok 4.5".into(),
+                },
+                CursorModelInfo {
+                    id: "gpt-5.6-sol-high".into(),
+                    label: "GPT 5.6 Sol High".into(),
+                },
+                CursorModelInfo {
+                    id: "composer-2.5".into(),
+                    label: "composer-2.5".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_models_output_dedupes_bare_and_display_lines() {
+        let models = parse_models_output(
+            "\
+gpt-5.6-sol-high
+gpt-5.6-sol-high - GPT 5.6 Sol High
+cursor-grok-4.5-high - Cursor Grok 4.5
+",
+        );
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "gpt-5.6-sol-high");
+        assert_eq!(models[0].label, "gpt-5.6-sol-high");
+        assert_eq!(models[1].id, "cursor-grok-4.5-high");
+        assert_eq!(models[1].label, "Cursor Grok 4.5");
     }
 }

@@ -91,4 +91,22 @@ mod tests {
             .unwrap_err();
         assert!(err.contains("no allowed architect model"));
     }
+
+    #[test]
+    fn prefers_sol_from_parsed_display_line_catalog() {
+        let catalog = crate::cursor::parse_models_output(
+            "\
+cursor-grok-4.5-high - Cursor Grok 4.5
+gpt-5.6-sol-high - GPT 5.6 Sol High
+composer-2.5 - Composer 2.5
+",
+        );
+        let sel = select_architect_model(&catalog).unwrap();
+        assert_eq!(sel.selected_model, ARCHITECT_PREFERRED_MODEL);
+        assert!(!sel.degraded);
+        assert!(sel
+            .available_models
+            .iter()
+            .all(|id| !id.contains(" - ")));
+    }
 }

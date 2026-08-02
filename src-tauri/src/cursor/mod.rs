@@ -10,9 +10,9 @@ pub mod types;
 
 pub use builder::{build_cursor_command, preview_built_command, BuilderError};
 pub use probe::{
-    discover_features, invalidate_probe_cache, list_cursor_models, parse_models_output,
-    parse_version_string, probe_cursor_capability, probe_cursor_capability_with_configured,
-    probe_with_deps,
+    discover_features, invalidate_probe_cache, list_cursor_models, normalize_model_id,
+    parse_models_output, parse_version_string, probe_cursor_capability,
+    probe_cursor_capability_with_configured, probe_with_deps,
 };
 pub use process::{run_argv_capture, run_argv_capture_env};
 pub use resolve::{
