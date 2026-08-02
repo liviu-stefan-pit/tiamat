@@ -12,6 +12,26 @@ pub struct DiffBoundaryReport {
     pub ok: bool,
 }
 
+/// Normalize a relative path for snapshot set membership / rejoining.
+/// Always uses `/` separators. Case-folds only on Windows so Linux stays
+/// case-sensitive (required for escape proofs like `ESCAPE_PROOF.txt`).
+fn normalize_rel_key(rel: &str) -> String {
+    let unified = rel.replace('\\', "/");
+    if cfg!(windows) {
+        unified.to_ascii_lowercase()
+    } else {
+        unified
+    }
+}
+
+fn rel_key(root: &Path, path: &Path) -> String {
+    let rel = path
+        .strip_prefix(root)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| path.to_string_lossy().into_owned());
+    normalize_rel_key(&rel)
+}
+
 /// List changed/untracked files relative to HEAD via porcelain status.
 pub fn collect_changed_files(repo_root: &Path) -> ExecutorResult<Vec<String>> {
     let porcelain = git_text(repo_root, &["status", "--porcelain"]).unwrap_or_default();
@@ -27,7 +47,8 @@ pub fn collect_changed_files(repo_root: &Path) -> ExecutorResult<Vec<String>> {
             path_part
         };
         if !path.is_empty() {
-            files.push(path.replace('/', "\\"));
+            // Keep forward slashes so Path::join works on Unix and Windows.
+            files.push(path.replace('\\', "/"));
         }
     }
     files.sort();
@@ -51,11 +72,7 @@ fn walk(root: &Path, current: &Path, depth: usize, max_depth: usize, out: &mut H
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        let rel = path
-            .strip_prefix(root)
-            .map(|p| p.to_string_lossy().replace('/', "\\"))
-            .unwrap_or_else(|_| path.to_string_lossy().replace('/', "\\"));
-        out.insert(rel.to_ascii_lowercase());
+        out.insert(rel_key(root, &path));
         if path.is_dir() {
             let name = path
                 .file_name()
@@ -81,7 +98,8 @@ pub fn validate_diff_boundaries(
         let abs = if Path::new(rel).is_absolute() {
             PathBuf::from(rel)
         } else {
-            repo_root.join(rel)
+            // Forward-slash relatives join correctly on both platforms.
+            repo_root.join(rel.replace('\\', "/"))
         };
         let abs_s = abs.to_string_lossy().to_string();
         let ok = write_roots
@@ -111,10 +129,11 @@ pub fn find_new_escapes(
 ) -> Vec<String> {
     let mut escaped = Vec::new();
     for rel in after.difference(before) {
-        let abs = managed_run_root.join(rel);
+        // Keys use `/`; Path::join accepts that on Windows and Unix.
+        let abs = managed_run_root.join(rel.replace('\\', "/"));
         let abs_s = abs.to_string_lossy().to_string();
         // Ignore control/.tiamat and quarantine itself, under either separator.
-        let normalized = rel.to_ascii_lowercase().replace('\\', "/");
+        let normalized = normalize_rel_key(rel);
         if normalized.starts_with("control/")
             || normalized.starts_with("quarantine/")
             || normalized.starts_with("fingerprints/")
@@ -211,5 +230,56 @@ mod tests {
             validate_diff_boundaries(root, &[fixture::APP.into()], &[fixture::REL_FEATURE.into()])
                 .unwrap();
         assert!(report.ok);
+    }
+
+    #[test]
+    fn find_new_escapes_detects_mixed_case_proof_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let managed = dir.path();
+        let write_root = managed.join("projects").join("app");
+        std::fs::create_dir_all(&write_root).unwrap();
+        std::fs::write(write_root.join("ok.ts"), "ok\n").unwrap();
+
+        let before = snapshot_paths(managed, 6);
+        // Mixed-case filename: lowercasing the snapshot key must not break detection.
+        let escape = managed.join("ESCAPE_PROOF.txt");
+        std::fs::write(&escape, "out of bounds\n").unwrap();
+        let after = snapshot_paths(managed, 6);
+
+        let escaped = find_new_escapes(
+            managed,
+            &[write_root.display().to_string()],
+            &before,
+            &after,
+        );
+        assert_eq!(escaped.len(), 1, "escaped={escaped:?}");
+        assert!(
+            escaped[0].ends_with("ESCAPE_PROOF.txt") || escaped[0].ends_with("escape_proof.txt"),
+            "unexpected path {}",
+            escaped[0]
+        );
+        // On Unix the on-disk name must be preserved exactly.
+        #[cfg(unix)]
+        assert!(escaped[0].ends_with("ESCAPE_PROOF.txt"));
+    }
+
+    #[test]
+    fn find_new_escapes_ignores_files_inside_write_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let managed = dir.path();
+        let write_root = managed.join("projects").join("app");
+        std::fs::create_dir_all(write_root.join("src")).unwrap();
+
+        let before = snapshot_paths(managed, 6);
+        std::fs::write(write_root.join("src").join("feature.ts"), "export {}\n").unwrap();
+        let after = snapshot_paths(managed, 6);
+
+        let escaped = find_new_escapes(
+            managed,
+            &[write_root.display().to_string()],
+            &before,
+            &after,
+        );
+        assert!(escaped.is_empty(), "escaped={escaped:?}");
     }
 }

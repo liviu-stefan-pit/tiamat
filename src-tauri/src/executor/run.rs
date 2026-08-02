@@ -705,7 +705,10 @@ fn run_phase_agent_hosted(
     let request = SpawnRequest {
         run_id,
         phase_id: phase_id.map(str::to_string),
-        attempt_id,
+        // Ephemeral stores only create the runs row; attaching an orphan attempt_id
+        // trips the processes→attempts FOREIGN KEY. Real scheduler hosts insert the
+        // attempt first and may pass a live id through.
+        attempt_id: if host.is_some() { attempt_id } else { None },
         argv: argv.to_vec(),
         stdin: stdin.map(str::to_string),
         workspace: workspace.map(str::to_string),

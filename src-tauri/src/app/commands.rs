@@ -1212,7 +1212,7 @@ pub fn execute_phase_fixture(
     let store = state.store.lock().map_err(|e| e.to_string())?;
     let outcome = crate::executor::execute_phase(crate::executor::ExecutePhaseRequest {
         run_id,
-        attempt_id: Some(Uuid::new_v4()),
+        attempt_id: None,
         plan: &mut plan,
         phase_id: &phase_id,
         workspace: &mut workspace,

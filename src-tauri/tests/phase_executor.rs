@@ -230,7 +230,7 @@ fn fixture_success_checkpoints_only_after_all_three_gates() {
 
     let outcome = execute_phase(ExecutePhaseRequest {
         run_id,
-        attempt_id: Some(Uuid::new_v4()),
+        attempt_id: None,
         plan: &mut plan,
         phase_id: "P01",
         workspace: &mut workspace,
