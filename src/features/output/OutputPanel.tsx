@@ -31,7 +31,11 @@ export function OutputPanel({ outputDir, onOutputDirChange }: OutputPanelProps) 
     <section className="pane" data-testid="output-panel">
       <header className="pane-header">
         <h2>Output</h2>
-        <p>Choose where the project will be built.</p>
+        <p>
+          Folder where Tiamat creates the run workspace. Same folder as your
+          notes is fine — work lands in <code>run-&lt;id&gt;/projects/</code>{" "}
+          beside your inputs, not by overwriting them.
+        </p>
       </header>
 
       <div className="button-row">

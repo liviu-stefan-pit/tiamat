@@ -21,17 +21,6 @@ use crate::workspace::types::{
     RunWorkspaceManifest,
 };
 
-/// True when `a` and `b` are the same path or one contains the other.
-fn paths_overlap(a: &Path, b: &Path) -> bool {
-    let a_s = a.to_string_lossy();
-    let b_s = b.to_string_lossy();
-    if a_s == b_s {
-        return true;
-    }
-    crate::workspace::roots::is_within_managed(&a_s, &b_s)
-        || crate::workspace::roots::is_within_managed(&b_s, &a_s)
-}
-
 pub struct MaterializeRequest {
     pub run_id: Uuid,
     pub intake: IntakeManifest,
@@ -48,18 +37,8 @@ pub fn materialize_run_workspace(req: MaterializeRequest) -> WorkspaceResult<Run
         )));
     }
 
-    // Refuse output folders that would nest the managed run inside an intake source
-    // (copying that source then recurses into run-* until paths explode).
-    for project in &req.intake.projects {
-        let source = PathBuf::from(&project.root);
-        if paths_overlap(&source, &req.managed_parent) {
-            return Err(WorkspaceError::Message(format!(
-                "output folder {} overlaps intake source {}. Choose an empty output folder outside the input.",
-                req.managed_parent.display(),
-                source.display()
-            )));
-        }
-    }
+    // Output may equal the intake folder (common for notes → build-in-place).
+    // Copying skips managed `run-*` dirs so we never nest the workspace into itself.
 
     fs::create_dir_all(managed_run_root.join("projects"))?;
     fs::create_dir_all(managed_run_root.join("notes"))?;
