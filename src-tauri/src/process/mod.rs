@@ -8,6 +8,7 @@ mod job;
 mod reconcile;
 mod spawn;
 mod types;
+mod windows_cmd;
 
 pub use abort::{
     acknowledge_degraded, can_start_with_abort_policy, mark_shortcut_registered, rebind_shortcut,
@@ -23,6 +24,7 @@ pub use spawn::{
     attribute_list_api_available, prove_attribute_list_association, AssociationMethod,
 };
 pub use types::*;
+pub use windows_cmd::{normalize_windows_argv, quote_windows_arg};
 
 pub const MODULE: &str = "process";
 

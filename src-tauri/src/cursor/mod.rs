@@ -16,8 +16,9 @@ pub use probe::{
 };
 pub use process::{run_argv_capture, run_argv_capture_env};
 pub use resolve::{
-    resolve_cursor_executable, resolve_cursor_executable_with_configured,
-    resolve_from_configured_and_env,
+    prepare_hosted_cursor_argv, resolve_cursor_executable,
+    resolve_cursor_executable_with_configured, resolve_from_configured_and_env,
+    strip_lone_dash_argv, unwind_cursor_launcher, UnwoundCursorRuntime,
 };
 pub use stream::parse_stream_json;
 pub use types::*;

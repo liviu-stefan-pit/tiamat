@@ -124,6 +124,9 @@ pub fn build_cursor_command(
         }
     }
 
+    // Never pass a lone "-" (PowerShell -File rejects it; stdin carries the prompt).
+    let argv = crate::cursor::resolve::strip_lone_dash_argv(&argv);
+
     Ok(BuiltCursorCommand {
         argv,
         stdin: request.prompt.clone(),

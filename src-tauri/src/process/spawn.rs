@@ -3,6 +3,7 @@
 
 use super::error::{ProcessError, ProcessResult};
 use super::job::JobObject;
+use super::windows_cmd::{normalize_windows_argv, quote_windows_arg};
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{self, Write};
@@ -132,10 +133,12 @@ pub fn spawn_hosted(
     if argv.is_empty() {
         return Err(ProcessError::Spawn("argv must not be empty".into()));
     }
-    match spawn_attribute_list_piped(argv, stdin_data, env, workspace) {
+    let argv = normalize_windows_argv(argv);
+    match spawn_attribute_list_piped(&argv, stdin_data, env, workspace) {
         Ok(v) => Ok(v),
         Err(attr_err) => {
-            let (mut spawned, child) = spawn_contained_suspended(argv, stdin_data, env, workspace)?;
+            let (mut spawned, child) =
+                spawn_contained_suspended(&argv, stdin_data, env, workspace)?;
             spawned.association = AssociationMethod::SuspendedAssignDegraded;
             spawned.degraded_association = true;
             // Preserve the attribute-list failure reason in executable metadata path callers.
@@ -295,7 +298,17 @@ fn spawn_attribute_list_piped(
         // Write stdin then close write end so the child sees EOF.
         if let Some(data) = stdin_data {
             let mut file = File::from_raw_handle(stdin_w.0 as RawHandle);
-            let _ = file.write_all(data.as_bytes());
+            if let Err(e) = file.write_all(data.as_bytes()) {
+                drop(file);
+                let _ = CloseHandle(stdout_r);
+                let _ = CloseHandle(stderr_r);
+                let _ = std::process::Command::new("taskkill")
+                    .args(["/PID", &pid.to_string(), "/T", "/F"])
+                    .output();
+                return Err(ProcessError::Spawn(format!(
+                    "failed to write full stdin to child: {e}"
+                )));
+            }
             // drop closes
         } else {
             let _ = CloseHandle(stdin_w);
@@ -373,7 +386,7 @@ fn spawn_contained_suspended(
 ) -> ProcessResult<(SpawnedInJob, HostedChild)> {
     use std::os::windows::process::CommandExt;
     use std::process::{Command, Stdio};
-    use windows::Win32::System::Threading::CREATE_SUSPENDED;
+    use windows::Win32::System::Threading::{CREATE_NO_WINDOW, CREATE_SUSPENDED};
 
     let job = JobObject::create_kill_on_close(None)?;
     let program = &argv[0];
@@ -384,7 +397,7 @@ fn spawn_contained_suspended(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .creation_flags(CREATE_SUSPENDED.0);
+        .creation_flags(CREATE_SUSPENDED.0 | CREATE_NO_WINDOW.0);
     if let Some(cwd) = workspace {
         cmd.current_dir(cwd);
     }
@@ -419,7 +432,25 @@ fn spawn_contained_suspended(
 
     if let Some(data) = stdin_data {
         if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(data.as_bytes());
+            if let Err(e) = stdin.write_all(data.as_bytes()) {
+                let _ = child.kill();
+                unsafe {
+                    let _ = windows::Win32::System::Threading::TerminateProcess(proc_handle, 1);
+                    let _ = windows::Win32::Foundation::CloseHandle(proc_handle);
+                }
+                return Err(ProcessError::Spawn(format!(
+                    "failed to write full stdin to child: {e}"
+                )));
+            }
+        } else {
+            let _ = child.kill();
+            unsafe {
+                let _ = windows::Win32::System::Threading::TerminateProcess(proc_handle, 1);
+                let _ = windows::Win32::Foundation::CloseHandle(proc_handle);
+            }
+            return Err(ProcessError::Spawn(
+                "child stdin pipe missing after spawn".into(),
+            ));
         }
     } else if let Some(stdin) = child.stdin.take() {
         drop(stdin);
@@ -477,47 +508,36 @@ fn resume_process_threads(pid: u32) -> ProcessResult<()> {
 
 #[cfg(windows)]
 fn join_windows_command_line(argv: &[String]) -> String {
+    // Match probe `raw_arg` semantics for cmd.exe /d /s /c <payload>: the /c
+    // payload is already a single pre-built command string and must not be
+    // re-quoted (inner quotes around spaced paths would otherwise break).
+    if argv.len() >= 4
+        && argv[0].eq_ignore_ascii_case("cmd.exe")
+        && argv[1] == "/d"
+        && argv[2] == "/s"
+        && argv[3] == "/c"
+    {
+        let mut line = format!(
+            "{} {} {} {}",
+            quote_windows_arg(&argv[0]),
+            argv[1],
+            argv[2],
+            argv[3]
+        );
+        if let Some(payload) = argv.get(4) {
+            line.push(' ');
+            line.push_str(payload);
+        }
+        for extra in argv.iter().skip(5) {
+            line.push(' ');
+            line.push_str(&quote_windows_arg(extra));
+        }
+        return line;
+    }
     argv.iter()
         .map(|a| quote_windows_arg(a))
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-#[cfg(windows)]
-fn quote_windows_arg(arg: &str) -> String {
-    if arg.is_empty() {
-        return "\"\"".into();
-    }
-    let needs = arg.chars().any(|c| c == ' ' || c == '\t' || c == '"');
-    if !needs {
-        return arg.to_string();
-    }
-    let mut out = String::from("\"");
-    let mut backslashes = 0u32;
-    for ch in arg.chars() {
-        match ch {
-            '\\' => backslashes += 1,
-            '"' => {
-                for _ in 0..(backslashes * 2 + 1) {
-                    out.push('\\');
-                }
-                out.push('"');
-                backslashes = 0;
-            }
-            _ => {
-                for _ in 0..backslashes {
-                    out.push('\\');
-                }
-                backslashes = 0;
-                out.push(ch);
-            }
-        }
-    }
-    for _ in 0..(backslashes * 2) {
-        out.push('\\');
-    }
-    out.push('"');
-    out
 }
 
 #[cfg(windows)]
@@ -663,5 +683,36 @@ mod tests {
     fn quote_handles_spaces() {
         assert_eq!(quote_windows_arg("a b"), "\"a b\"");
         assert_eq!(quote_windows_arg("plain"), "plain");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn join_command_line_quotes_spaces() {
+        let line = join_windows_command_line(&["prog.exe".into(), "a b".into()]);
+        assert!(line.contains("\"a b\""));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn join_cmd_c_payload_is_not_double_quoted() {
+        let payload =
+            r#"C:\tools\agent.cmd --print --workspace "C:\My Project\notes" --mode plan"#;
+        let line = join_windows_command_line(&[
+            "cmd.exe".into(),
+            "/d".into(),
+            "/s".into(),
+            "/c".into(),
+            payload.into(),
+        ]);
+        // Payload must appear verbatim after /c (probe raw_arg semantics).
+        assert!(
+            line.ends_with(payload),
+            "expected raw payload suffix, got {line}"
+        );
+        assert!(
+            !line.contains(r#"\"C:\My Project\notes\""#),
+            "inner quotes must not be escaped by outer join: {line}"
+        );
+        assert!(line.starts_with("cmd.exe /d /s /c "));
     }
 }

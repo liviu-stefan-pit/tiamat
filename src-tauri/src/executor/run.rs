@@ -8,8 +8,8 @@ use tiamat_contracts::{
 use uuid::Uuid;
 
 use crate::cursor::{
-    build_cursor_command, parse_stream_json, CursorCapabilityReport, CursorInvokeRequest,
-    ProcessCapture, DEFAULT_CURSOR_TIMEOUT_MS,
+    build_cursor_command, parse_stream_json, prepare_hosted_cursor_argv, CursorCapabilityReport,
+    CursorInvokeRequest, ProcessCapture, DEFAULT_CURSOR_TIMEOUT_MS,
 };
 use crate::db::Store;
 use crate::executor::diff::{
@@ -128,7 +128,11 @@ pub fn execute_phase(req: ExecutePhaseRequest<'_>) -> ExecutorResult<PhaseExecut
     .map_err(|e| ExecutorError::Message(e.to_string()))?;
 
     let (argv, stdin) = expand_executable_override(&built.argv, Some(built.stdin.as_str()));
+    let (argv, unwind_env) = prepare_hosted_cursor_argv(&argv);
     let mut env = HashMap::new();
+    for (k, v) in unwind_env {
+        env.insert(k, v);
+    }
     if let Some(mode) = req.fake_cli_mode {
         env.insert("TIAMAT_FAKE_CLI_MODE".into(), mode.to_string());
     }

@@ -331,3 +331,149 @@ fn hosted_spawn_defaults_to_attribute_list_association() {
     }
     store.assert_run_may_become_terminal(run_id).unwrap();
 }
+
+#[test]
+fn hosted_cmd_wrapper_runs_architect_plan_mode() {
+    let dir = tempdir().unwrap();
+    let store = Store::open(dir.path().join("tiamat.db"), dir.path().join("artifacts")).unwrap();
+    let run_id = Uuid::new_v4();
+    store
+        .create_run(run_id, "architect cmd", "planning")
+        .unwrap();
+    let host = ProcessHost::new();
+    let workspace = dir.path().join("ws");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let argv = vec![
+        fake_cli().to_string_lossy().to_string(),
+        "--print".into(),
+        "--mode".into(),
+        "plan".into(),
+        "--output-format".into(),
+        "stream-json".into(),
+    ];
+    let outcome = host
+        .run_hosted(
+            &store,
+            tiamat_lib::process::SpawnRequest {
+                run_id,
+                phase_id: Some("architect".into()),
+                attempt_id: None,
+                argv,
+                stdin: Some("plan only".into()),
+                workspace: Some(workspace.display().to_string()),
+                env: vec![("TIAMAT_FAKE_CLI_MODE".into(), "architect_valid".into())],
+                watchdog: WatchdogConfig {
+                    warn_after_ms: 5_000,
+                    graceful_after_ms: 30_000,
+                    force_grace_ms: 500,
+                    drain_timeout_ms: 2_000,
+                },
+                resume_chat_hint: None,
+                next_model_on_timeout: None,
+                next_tier_on_timeout: None,
+            },
+        )
+        .expect("hosted architect cmd");
+    assert_eq!(outcome.exit_code, Some(0), "stderr={}", outcome.stderr);
+    assert!(!outcome.truncated);
+    assert!(outcome.stdout.contains("schemaVersion") || outcome.stdout.contains("assistant"));
+    assert_zero_survivors(&outcome);
+}
+
+#[cfg(windows)]
+#[test]
+fn ps1_dash_trap_fails_with_lone_dash_but_prepare_strips_it() {
+    use tiamat_lib::cursor::prepare_hosted_cursor_argv;
+    use tiamat_lib::process::{normalize_windows_argv, run_capture_hosted, SpawnRequest};
+
+    let trap = tiamat_contracts::repo_root()
+        .join("fixtures")
+        .join("cursor-cli")
+        .join("ps1-dash-trap.cmd");
+    assert!(trap.is_file(), "missing {}", trap.display());
+
+    // Raw lone "-" through the PowerShell -File chain fails with the known PSArgumentException.
+    let raw = vec![
+        trap.to_string_lossy().to_string(),
+        "--print".into(),
+        "-".into(),
+    ];
+    let dir = tempdir().unwrap();
+    let store = Store::open_in_memory(dir.path()).unwrap();
+    let run_id = Uuid::new_v4();
+    store.create_run(run_id, "dash-trap", "planning").unwrap();
+    let host = ProcessHost::new();
+    let bad = run_capture_hosted(
+        &store,
+        &host,
+        SpawnRequest {
+            run_id,
+            phase_id: Some("architect".into()),
+            attempt_id: None,
+            argv: raw.clone(),
+            stdin: Some("x".into()),
+            workspace: None,
+            env: vec![],
+            watchdog: WatchdogConfig {
+                warn_after_ms: 2_000,
+                graceful_after_ms: 8_000,
+                force_grace_ms: 200,
+                drain_timeout_ms: 1_000,
+            },
+            resume_chat_hint: None,
+            next_model_on_timeout: None,
+            next_tier_on_timeout: None,
+        },
+    )
+    .expect("hosted capture");
+    assert_ne!(bad.exit_code, Some(0));
+    assert!(
+        bad.stderr.contains("name") || bad.stderr.contains("Argument"),
+        "expected PS name error, got {}",
+        bad.stderr
+    );
+
+    // prepare_hosted_cursor_argv strips "-" so the same trap succeeds.
+    let (prepared, _) = prepare_hosted_cursor_argv(&raw);
+    assert!(!prepared.iter().any(|a| a == "-"));
+    let run_id2 = Uuid::new_v4();
+    store.create_run(run_id2, "dash-trap-ok", "planning").unwrap();
+    let good = run_capture_hosted(
+        &store,
+        &host,
+        SpawnRequest {
+            run_id: run_id2,
+            phase_id: Some("architect".into()),
+            attempt_id: None,
+            argv: prepared,
+            stdin: Some("x".into()),
+            workspace: None,
+            env: vec![],
+            watchdog: WatchdogConfig {
+                warn_after_ms: 2_000,
+                graceful_after_ms: 8_000,
+                force_grace_ms: 200,
+                drain_timeout_ms: 1_000,
+            },
+            resume_chat_hint: None,
+            next_model_on_timeout: None,
+            next_tier_on_timeout: None,
+        },
+    )
+    .expect("hosted capture cleaned");
+    assert_eq!(good.exit_code, Some(0), "stderr={}", good.stderr);
+    assert!(good.stdout.contains("chat-dash-trap"));
+
+    // Spaced-path /c payload must survive normalize without nested escaping.
+    let normalized = normalize_windows_argv(&[
+        trap.to_string_lossy().to_string(),
+        "--workspace".into(),
+        r"C:\My Project\notes".into(),
+    ]);
+    assert_eq!(normalized[0].to_ascii_lowercase(), "cmd.exe");
+    let payload = normalized.last().expect("payload");
+    assert!(
+        payload.contains(r#""C:\My Project\notes""#) || payload.contains("My Project"),
+        "payload={payload}"
+    );
+}

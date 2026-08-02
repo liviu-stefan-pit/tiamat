@@ -6,14 +6,15 @@ use uuid::Uuid;
 use std::collections::HashMap;
 
 use crate::cursor::{
-    parse_stream_json, CursorCapabilityReport, ProcessCapture, DEFAULT_CURSOR_TIMEOUT_MS,
+    parse_stream_json, prepare_hosted_cursor_argv, CursorAuthStatus, CursorCapabilityReport,
+    ProcessCapture, DEFAULT_CURSOR_TIMEOUT_MS,
 };
 use crate::db::Store;
 use crate::intake::PreflightReport;
 use crate::planner::context::package_architect_context;
 use crate::planner::invoke::build_architect_command;
 use crate::planner::model::select_architect_model;
-use crate::planner::parse::extract_final_json_object;
+use crate::planner::parse::extract_plan_json_object;
 use crate::planner::persist::{checkpoint_control_plan, write_plan_artifacts};
 use crate::planner::prompt::{repair_prompt, ARCHITECT_SYSTEM_PROMPT};
 use crate::planner::types::{
@@ -23,9 +24,11 @@ use crate::planner::validate::validate_plan_json;
 use crate::process::{
     run_capture_hosted, watchdog_for_timeout, HostedSpawnContext, ProcessHost, SpawnRequest,
 };
+use crate::security::{check_prompt_size, redact_line, OutputLimitConfig};
 use crate::workspace::{write_manifest, RunWorkspaceManifest};
 
 const ARCHITECT_TIMEOUT_MS: u64 = 180_000;
+const STDERR_EXCERPT_LIMIT: usize = 800;
 
 pub struct ArchitectPipelineRequest<'a> {
     pub run_id: Uuid,
@@ -42,6 +45,29 @@ pub struct ArchitectPipelineRequest<'a> {
 pub fn run_architect_pipeline(req: ArchitectPipelineRequest<'_>) -> ArchitectRunResult {
     let mut evidence = Vec::new();
     let mut attempts = Vec::new();
+
+    if let Err(err) = gate_architect_capability(req.capability, req.executable_override.is_some()) {
+        return ArchitectRunResult {
+            ok: false,
+            run_id: req.run_id.to_string(),
+            model_selection: crate::planner::types::ArchitectModelSelection {
+                requested_model: crate::planner::types::ARCHITECT_PREFERRED_MODEL.into(),
+                selected_model: String::new(),
+                degraded: false,
+                reason: err.clone(),
+                available_models: req.capability.models.iter().map(|m| m.id.clone()).collect(),
+            },
+            plan: None,
+            plan_json_path: None,
+            master_plan_md_path: None,
+            hashes: None,
+            checkpoint: None,
+            attempts,
+            degraded_mode: false,
+            error: Some(err),
+            evidence,
+        };
+    }
 
     let model_selection = match select_architect_model(&req.capability.models) {
         Ok(sel) => sel,
@@ -100,6 +126,9 @@ pub fn run_architect_pipeline(req: ArchitectPipelineRequest<'_>) -> ArchitectRun
         "{ARCHITECT_SYSTEM_PROMPT}\n\n---\n\n# Bounded intake context\n\n{}\n",
         context.text
     );
+    if let Err(err) = check_prompt_size(&user_prompt, &OutputLimitConfig::default()) {
+        return fail(req.run_id, model_selection, attempts, evidence, err);
+    }
 
     let control_root = PathBuf::from(&req.workspace.control_root);
     let workspace_mount = architect_workspace_mount(req.workspace);
@@ -115,50 +144,75 @@ pub fn run_architect_pipeline(req: ArchitectPipelineRequest<'_>) -> ArchitectRun
         req.run_id,
         req.workspace,
         false,
+        req.executable_override.is_some(),
         &mut attempts,
         &mut evidence,
         req.host.as_ref(),
     ) {
         Ok(pair) => pair,
         Err(issues) => {
-            // One repair resume only.
-            let Some(parent_chat) = attempts.last().and_then(|a| a.chat_id.clone()) else {
-                return fail(
+            let parent_chat = attempts.last().and_then(|a| a.chat_id.clone());
+            if let Some(parent_chat) = parent_chat {
+                // One repair resume only.
+                evidence.push("repair_resume_started".into());
+                let repair = repair_prompt(&issues);
+                match invoke_and_validate(
+                    &executable,
+                    req.capability,
+                    &workspace_mount,
+                    &model_selection.selected_model,
+                    &repair,
+                    Some(parent_chat.as_str()),
                     req.run_id,
-                    model_selection,
-                    attempts,
-                    evidence,
-                    format!(
-                        "architect output invalid and no chat id for repair: {}",
-                        issues.join("; ")
-                    ),
-                );
-            };
-            evidence.push("repair_resume_started".into());
-            let repair = repair_prompt(&issues);
-            match invoke_and_validate(
-                &executable,
-                req.capability,
-                &workspace_mount,
-                &model_selection.selected_model,
-                &repair,
-                Some(parent_chat.as_str()),
-                req.run_id,
-                req.workspace,
-                true,
-                &mut attempts,
-                &mut evidence,
-                req.host.as_ref(),
-            ) {
-                Ok(pair) => pair,
-                Err(repair_issues) => {
-                    return fail(
-                        req.run_id,
-                        model_selection,
-                        attempts,
-                        evidence,
-                        format!("architect repair failed: {}", repair_issues.join("; ")),
-                    );
+                    req.workspace,
+                    true,
+                    req.executable_override.is_some(),
+                    &mut attempts,
+                    &mut evidence,
+                    req.host.as_ref(),
+                ) {
+                    Ok(pair) => pair,
+                    Err(repair_issues) => {
+                        return fail(
+                            req.run_id,
+                            model_selection,
+                            attempts,
+                            evidence,
+                            format!("architect repair failed: {}", repair_issues.join("; ")),
+                        );
+                    }
+                }
+            } else {
+                // No chat id yet — one fresh full-prompt retry (not --resume).
+                evidence.push("fresh_retry_without_chat_id".into());
+                match invoke_and_validate(
+                    &executable,
+                    req.capability,
+                    &workspace_mount,
+                    &model_selection.selected_model,
+                    &user_prompt,
+                    None,
+                    req.run_id,
+                    req.workspace,
+                    true,
+                    req.executable_override.is_some(),
+                    &mut attempts,
+                    &mut evidence,
+                    req.host.as_ref(),
+                ) {
+                    Ok(pair) => pair,
+                    Err(retry_issues) => {
+                        return fail(
+                            req.run_id,
+                            model_selection,
+                            attempts,
+                            evidence,
+                            format!(
+                                "architect output invalid and no chat id for repair: {}",
+                                retry_issues.join("; ")
+                            ),
+                        );
+                    }
                 }
             }
         }
@@ -215,6 +269,35 @@ pub fn run_architect_pipeline(req: ArchitectPipelineRequest<'_>) -> ArchitectRun
     }
 }
 
+fn gate_architect_capability(
+    capability: &CursorCapabilityReport,
+    test_override: bool,
+) -> Result<(), String> {
+    if test_override {
+        return Ok(());
+    }
+    if !capability.features.mode_plan {
+        return Err("Cursor CLI does not advertise plan mode; architect cannot start".into());
+    }
+    match capability.auth {
+        CursorAuthStatus::Unauthenticated => {
+            let detail = capability
+                .auth_message
+                .clone()
+                .unwrap_or_else(|| "Cursor CLI is unauthenticated".into());
+            Err(format!("architect blocked: {detail}"))
+        }
+        CursorAuthStatus::Error => {
+            let detail = capability
+                .auth_message
+                .clone()
+                .unwrap_or_else(|| "Cursor auth probe failed".into());
+            Err(format!("architect blocked: {detail}"))
+        }
+        CursorAuthStatus::Ready | CursorAuthStatus::Unknown => Ok(()),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn invoke_and_validate(
     executable: &str,
@@ -226,6 +309,7 @@ fn invoke_and_validate(
     run_id: Uuid,
     workspace: &RunWorkspaceManifest,
     repaired: bool,
+    allow_fake_env: bool,
     attempts: &mut Vec<ArchitectAttemptRecord>,
     evidence: &mut Vec<String>,
     host: Option<&HostedSpawnContext<'_>>,
@@ -255,30 +339,44 @@ fn invoke_and_validate(
 
     // Support `node|path/to/fake-agent.mjs` executable encoding used by resolve/tests.
     let argv = expand_executable_argv(&built.argv);
+    let (argv, unwind_env) = prepare_hosted_cursor_argv(&argv);
 
-    let mut fake_env = HashMap::new();
-    fake_env.insert("TIAMAT_FAKE_PLAN_RUN_ID".into(), run_id.to_string());
-    if let Some(project) = workspace.projects.first() {
-        fake_env.insert(
-            "TIAMAT_FAKE_PLAN_PROJECT_ID".into(),
-            project.project_id.clone(),
-        );
-        fake_env.insert(
-            "TIAMAT_FAKE_PLAN_WRITE_ROOT".into(),
-            project.write_root.clone(),
-        );
-        fake_env.insert(
-            "TIAMAT_FAKE_PLAN_READ_ROOT".into(),
-            project
-                .read_roots
-                .first()
-                .cloned()
-                .unwrap_or_else(|| workspace.managed_run_root.clone()),
-        );
-    } else if let Some(notes) = workspace.notes_roots.first() {
-        fake_env.insert("TIAMAT_FAKE_PLAN_PROJECT_ID".into(), "notes".into());
-        fake_env.insert("TIAMAT_FAKE_PLAN_WRITE_ROOT".into(), notes.clone());
-        fake_env.insert("TIAMAT_FAKE_PLAN_READ_ROOT".into(), notes.clone());
+    evidence.push(format!(
+        "architect_argv={}",
+        crate::cursor::redaction::redact_argv(&argv).join(" ")
+    ));
+    if unwind_env.iter().any(|(k, _)| k == "CURSOR_INVOKED_AS") {
+        evidence.push("cursor_launcher_unwound_to_node".into());
+    }
+
+    let mut env = HashMap::new();
+    for (k, v) in unwind_env {
+        env.insert(k, v);
+    }
+    if allow_fake_env {
+        env.insert("TIAMAT_FAKE_PLAN_RUN_ID".into(), run_id.to_string());
+        if let Some(project) = workspace.projects.first() {
+            env.insert(
+                "TIAMAT_FAKE_PLAN_PROJECT_ID".into(),
+                project.project_id.clone(),
+            );
+            env.insert(
+                "TIAMAT_FAKE_PLAN_WRITE_ROOT".into(),
+                project.write_root.clone(),
+            );
+            env.insert(
+                "TIAMAT_FAKE_PLAN_READ_ROOT".into(),
+                project
+                    .read_roots
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| workspace.managed_run_root.clone()),
+            );
+        } else if let Some(notes) = workspace.notes_roots.first() {
+            env.insert("TIAMAT_FAKE_PLAN_PROJECT_ID".into(), "notes".into());
+            env.insert("TIAMAT_FAKE_PLAN_WRITE_ROOT".into(), notes.clone());
+            env.insert("TIAMAT_FAKE_PLAN_READ_ROOT".into(), notes.clone());
+        }
     }
 
     let capture = run_architect_hosted(
@@ -287,15 +385,26 @@ fn invoke_and_validate(
         &argv,
         built.timeout_ms,
         Some(&built.stdin),
-        &fake_env,
+        &env,
+        workspace_mount,
+        resume_chat_id,
     )
     .map_err(|e| vec![e])?;
     let parsed = parse_stream_json(&capture.stdout, &capture.stderr, &[]);
-    let chat_id = parsed.chat_id.clone();
+    let chat_id = parsed
+        .chat_id
+        .clone()
+        .or_else(|| extract_chat_id_from_text(&capture.stderr));
 
     let mut issues = Vec::new();
     if capture.timed_out {
         issues.push("architect process timed out".into());
+    }
+    if capture.truncated || capture.flood_detected {
+        issues.push("architect stdout/stderr truncated before plan extraction".into());
+    }
+    if let Some(warning) = &capture.cleanup_warning {
+        evidence.push(format!("cleanup_warning: {warning}"));
     }
     if capture.exit_code.unwrap_or(1) != 0 {
         issues.push(format!(
@@ -303,9 +412,26 @@ fn invoke_and_validate(
             capture.exit_code
         ));
     }
+    if parsed.terminal_ok == Some(false) {
+        issues.push("architect stream reported terminal error (result subtype=error)".into());
+    }
+    if let Some(excerpt) = stderr_excerpt(&capture.stderr) {
+        issues.push(format!("stderr: {excerpt}"));
+        evidence.push(format!("stderr_excerpt: {excerpt}"));
+    }
+    evidence.push(format!(
+        "architect_capture exit={:?} timed_out={} truncated={} duration_ms={} stdout_bytes={} stderr_bytes={}",
+        capture.exit_code,
+        capture.timed_out,
+        capture.truncated,
+        capture.duration_ms,
+        capture.stdout.len(),
+        capture.stderr.len()
+    ));
 
-    let json_text = match extract_final_json_object(&parsed.assistant_text)
-        .or_else(|_| extract_final_json_object(&capture.stdout))
+    // Prefer assistant-assembled text; fall back only to plan-shaped JSONL objects.
+    let json_text = match extract_plan_json_object(&parsed.assistant_text)
+        .or_else(|_| extract_plan_json_object_from_stream(&capture.stdout))
     {
         Ok(text) => text,
         Err(err) => {
@@ -331,8 +457,54 @@ fn invoke_and_validate(
         }
     };
 
+    if !issues.is_empty() && parsed.terminal_ok == Some(false) {
+        attempts.push(ArchitectAttemptRecord {
+            attempt: (attempts.len() as u32) + 1,
+            model: model.to_string(),
+            chat_id: chat_id.clone(),
+            usage: parsed.usage.clone(),
+            exit_code: capture.exit_code,
+            repaired,
+            validation_issues: issues
+                .iter()
+                .map(|m| crate::planner::types::PlanValidationIssue {
+                    code: "terminal".into(),
+                    message: m.clone(),
+                    phase_id: None,
+                })
+                .collect(),
+            proof,
+        });
+        return Err(issues);
+    }
+
     match validate_plan_json(&json_text, run_id, workspace) {
         Ok(plan) => {
+            if !issues.is_empty()
+                && (capture.timed_out
+                    || capture.exit_code.unwrap_or(1) != 0
+                    || capture.truncated
+                    || parsed.terminal_ok == Some(false))
+            {
+                attempts.push(ArchitectAttemptRecord {
+                    attempt: (attempts.len() as u32) + 1,
+                    model: model.to_string(),
+                    chat_id: chat_id.clone(),
+                    usage: parsed.usage.clone(),
+                    exit_code: capture.exit_code,
+                    repaired,
+                    validation_issues: issues
+                        .iter()
+                        .map(|m| crate::planner::types::PlanValidationIssue {
+                            code: "process".into(),
+                            message: m.clone(),
+                            phase_id: None,
+                        })
+                        .collect(),
+                    proof,
+                });
+                return Err(issues);
+            }
             attempts.push(ArchitectAttemptRecord {
                 attempt: (attempts.len() as u32) + 1,
                 model: model.to_string(),
@@ -346,10 +518,11 @@ fn invoke_and_validate(
             Ok((plan, chat_id))
         }
         Err(validation_issues) => {
-            let messages: Vec<String> = validation_issues
+            let mut messages: Vec<String> = validation_issues
                 .iter()
                 .map(|i| format!("{}: {}", i.code, i.message))
                 .collect();
+            messages.extend(issues);
             attempts.push(ArchitectAttemptRecord {
                 attempt: (attempts.len() as u32) + 1,
                 model: model.to_string(),
@@ -385,6 +558,68 @@ fn architect_workspace_mount(workspace: &RunWorkspaceManifest) -> PathBuf {
         return PathBuf::from(notes);
     }
     PathBuf::from(&workspace.control_root)
+}
+
+fn stderr_excerpt(stderr: &str) -> Option<String> {
+    let trimmed = stderr.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let redacted = redact_line(trimmed);
+    let excerpt = if redacted.len() > STDERR_EXCERPT_LIMIT {
+        format!("{}…", &redacted[..STDERR_EXCERPT_LIMIT])
+    } else {
+        redacted
+    };
+    Some(excerpt.replace('\n', " | "))
+}
+
+fn extract_chat_id_from_text(text: &str) -> Option<String> {
+    for line in text.lines() {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+            for key in [
+                "session_id",
+                "sessionId",
+                "chatId",
+                "chat_id",
+                "conversationId",
+                "conversation_id",
+            ] {
+                if let Some(id) = v.get(key).and_then(|x| x.as_str()) {
+                    if !id.is_empty() {
+                        return Some(id.to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn extract_plan_json_object_from_stream(stdout: &str) -> Result<String, String> {
+    // Prefer last JSONL object that looks like a ProjectPlan.
+    let mut last_plan = None;
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with('{') {
+            continue;
+        }
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
+            if looks_like_project_plan(&v) {
+                last_plan = Some(trimmed.to_string());
+            }
+        }
+    }
+    if let Some(plan) = last_plan {
+        return Ok(plan);
+    }
+    extract_plan_json_object(stdout)
+}
+
+fn looks_like_project_plan(value: &serde_json::Value) -> bool {
+    value.get("schemaVersion").is_some()
+        && value.get("phases").and_then(|p| p.as_array()).is_some()
+        && (value.get("runId").is_some() || value.get("run_id").is_some())
 }
 
 fn fail(
@@ -457,6 +692,7 @@ fn normalize_phase_status(status: &tiamat_contracts::PhaseStatus) -> String {
     .into()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_architect_hosted(
     host: Option<&HostedSpawnContext<'_>>,
     run_id: Uuid,
@@ -464,6 +700,8 @@ fn run_architect_hosted(
     timeout_ms: u64,
     stdin: Option<&str>,
     env: &HashMap<String, String>,
+    workspace_mount: &Path,
+    resume_chat_hint: Option<&str>,
 ) -> Result<ProcessCapture, String> {
     let env_vec: Vec<(String, String)> = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
     let request = SpawnRequest {
@@ -472,23 +710,23 @@ fn run_architect_hosted(
         attempt_id: None,
         argv: argv.to_vec(),
         stdin: stdin.map(str::to_string),
-        workspace: None,
+        workspace: Some(workspace_mount.display().to_string()),
         env: env_vec,
         watchdog: watchdog_for_timeout(timeout_ms),
-        resume_chat_hint: None,
+        resume_chat_hint: resume_chat_hint.map(str::to_string),
         next_model_on_timeout: None,
         next_tier_on_timeout: None,
     };
     match host {
         Some(ctx) => {
-            let _ = ctx.store.create_run(run_id, "architect", "planning");
+            let _ = ctx.store.ensure_run(run_id, "architect", "planning");
             run_capture_hosted(ctx.store, ctx.host, request).map_err(|e| e.to_string())
         }
         None => {
             let dir = std::env::temp_dir().join(format!("tiamat-architect-{}", Uuid::new_v4()));
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
             let store = Store::open_in_memory(&dir).map_err(|e| e.to_string())?;
-            let _ = store.create_run(run_id, "architect-ephemeral", "planning");
+            let _ = store.ensure_run(run_id, "architect-ephemeral", "planning");
             let ph = ProcessHost::new();
             run_capture_hosted(&store, &ph, request).map_err(|e| e.to_string())
         }

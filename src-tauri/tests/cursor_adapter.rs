@@ -57,6 +57,10 @@ fn run_fake(mode: &str, extra: &[&str], timeout_ms: u64, stdin: Option<&str>) ->
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
             timed_out: false,
             duration_ms: started.elapsed().as_millis() as u64,
+            truncated: false,
+            flood_detected: false,
+            cleanup_ok: true,
+            cleanup_warning: None,
         },
         Ok(Err(e)) => panic!("failed to collect output: {e}"),
         Err(_) => {
@@ -77,6 +81,10 @@ fn run_fake(mode: &str, extra: &[&str], timeout_ms: u64, stdin: Option<&str>) ->
                 stderr,
                 timed_out: true,
                 duration_ms: started.elapsed().as_millis() as u64,
+                truncated: false,
+                flood_detected: false,
+                cleanup_ok: true,
+                cleanup_warning: None,
             }
         }
     }
@@ -238,4 +246,68 @@ fn builder_preview_never_shell_concatenates_or_leaks_secrets() {
 fn unavailable_model_list_mode_surfaces_error() {
     let capture = run_fake("model_unavailable", &["--list-models"], 5_000, None);
     assert_ne!(capture.exit_code, Some(0));
+}
+
+#[test]
+fn builder_never_emits_lone_dash_token() {
+    let features = CursorFeatureFlags {
+        print_mode: true,
+        output_format: true,
+        stream_json: true,
+        workspace: true,
+        model: true,
+        mode_plan: true,
+        trust: true,
+        ..CursorFeatureFlags::default()
+    };
+    let root = tempfile::tempdir().unwrap();
+    let request = CursorInvokeRequest {
+        workspace: root.path().display().to_string(),
+        model: Some("gpt-5.6-sol-high".into()),
+        prompt: "plan".into(),
+        plan_mode: true,
+        trust: true,
+        output_format: Some("stream-json".into()),
+        ..CursorInvokeRequest::default()
+    };
+    let built = build_cursor_command("agent", &features, &request, Some(root.path())).unwrap();
+    assert!(!built.argv.iter().any(|a| a == "-"));
+}
+
+#[test]
+fn unwind_temp_cursor_agent_layout() {
+    use tiamat_lib::cursor::{prepare_hosted_cursor_argv, unwind_cursor_launcher};
+
+    let root = tempfile::tempdir().unwrap();
+    let install = root.path().join("cursor-agent");
+    let ver = install.join("versions").join("2026.07.23-abcdef0");
+    std::fs::create_dir_all(&ver).unwrap();
+    // Minimal stubs so is_file() succeeds.
+    std::fs::write(ver.join("node.exe"), b"MZ").unwrap();
+    std::fs::write(ver.join("index.js"), b"console.log(1)").unwrap();
+    let agent_cmd = install.join("agent.cmd");
+    std::fs::write(&agent_cmd, b"@echo off\r\n").unwrap();
+
+    let runtime = unwind_cursor_launcher(&agent_cmd.to_string_lossy()).expect("unwind");
+    assert!(runtime.node_exe.ends_with("node.exe"));
+    assert!(runtime.index_js.ends_with("index.js"));
+    assert_eq!(runtime.invoked_as.to_ascii_lowercase(), "agent.cmd");
+
+    let argv = vec![
+        agent_cmd.to_string_lossy().into_owned(),
+        "--print".into(),
+        "-".into(),
+        "--mode".into(),
+        "plan".into(),
+    ];
+    let (prepared, env) = prepare_hosted_cursor_argv(&argv);
+    assert_eq!(prepared[0], runtime.node_exe);
+    assert_eq!(prepared[1], runtime.index_js);
+    assert!(!prepared.iter().any(|a| a == "-"));
+    assert_eq!(
+        env.iter()
+            .find(|(k, _)| k == "CURSOR_INVOKED_AS")
+            .map(|(_, v)| v.as_str()),
+        Some("agent.cmd")
+    );
 }
