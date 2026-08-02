@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import type { EventEnvelope } from "../../domain/contracts";
+import {
+  cliConnectionState,
+  type CursorCapabilityReport,
+} from "../../domain/cursor";
 import type { PreflightReport } from "../../domain/intake";
 import { canStartImplementation } from "../../domain/intake";
 import { connectEventBridge } from "../../lib/tauri/bridge";
@@ -7,6 +11,7 @@ import {
   cancelRun,
   ensureDemoRun,
   getRunStatus,
+  probeCursorCapability,
   replayEvents,
   startRun,
   type RunStatusSnapshot,
@@ -14,17 +19,50 @@ import {
 import { ActivityLog } from "../activity-log/ActivityLog";
 import { IntakePanel } from "../intake/IntakePanel";
 import { OutputPanel } from "../output/OutputPanel";
+import { CliStatusLight } from "./CliStatusLight";
 import "./Shell.css";
+
+const CLI_PROBE_INTERVAL_MS = 30_000;
+
+const TERMINAL_RUN_STATUSES = new Set([
+  "idle",
+  "completed",
+  "failed",
+  "cancelled",
+  "interrupted",
+]);
+
+function isStoppableStatus(status: string | undefined): boolean {
+  if (!status) return false;
+  return !TERMINAL_RUN_STATUSES.has(status);
+}
 
 export function Shell() {
   const [events, setEvents] = useState<EventEnvelope[]>([]);
   const [preflight, setPreflight] = useState<PreflightReport | null>(null);
   const [inputPaths, setInputPaths] = useState<string[]>([]);
   const [outputDir, setOutputDir] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [runStatus, setRunStatus] = useState<RunStatusSnapshot | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
+  const [capability, setCapability] = useState<CursorCapabilityReport | null>(
+    null,
+  );
+  const [cliProbing, setCliProbing] = useState(false);
+
+  const refreshCli = useCallback(async () => {
+    setCliProbing(true);
+    try {
+      const report = await probeCursorCapability();
+      setCapability(report);
+    } catch {
+      setCapability(null);
+    } finally {
+      setCliProbing(false);
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -62,6 +100,14 @@ export function Shell() {
   }, []);
 
   useEffect(() => {
+    void refreshCli();
+    const id = window.setInterval(() => {
+      void refreshCli();
+    }, CLI_PROBE_INTERVAL_MS);
+    return () => window.clearInterval(id);
+  }, [refreshCli]);
+
+  useEffect(() => {
     if (!runId) return;
     const id = window.setInterval(() => {
       void getRunStatus()
@@ -84,8 +130,18 @@ export function Shell() {
       setError("Select at least one input path.");
       return;
     }
-    setBusy(true);
+    setStarting(true);
     setError(null);
+    // Optimistic: Stop must work immediately, even before start_run returns.
+    setRunStatus((prev) => ({
+      runId: prev?.runId ?? null,
+      status: "starting",
+      message: "Starting run…",
+      activeAttempts: prev?.activeAttempts ?? 0,
+      completedPhases: prev?.completedPhases ?? 0,
+      totalPhases: prev?.totalPhases ?? 0,
+      managedRunRoot: prev?.managedRunRoot ?? null,
+    }));
     try {
       const result = await startRun({
         inputPaths,
@@ -105,13 +161,18 @@ export function Shell() {
       setEvents(replayed);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      setRunStatus((prev) =>
+        prev
+          ? { ...prev, status: "failed", message: "Start failed" }
+          : prev,
+      );
     } finally {
-      setBusy(false);
+      setStarting(false);
     }
   }, [preflight, outputDir, inputPaths]);
 
   const onStop = useCallback(async () => {
-    setBusy(true);
+    setStopping(true);
     setError(null);
     try {
       const status = await cancelRun();
@@ -119,7 +180,7 @@ export function Shell() {
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setBusy(false);
+      setStopping(false);
     }
   }, []);
 
@@ -142,15 +203,30 @@ export function Shell() {
     canStartImplementation(preflight) &&
     outputDir.trim().length > 0 &&
     inputPaths.length > 0 &&
-    !busy;
+    !starting &&
+    !stopping &&
+    !isStoppableStatus(runStatus?.status);
+
+  // Stop stays available while starting or while a run is active — never locked by Run.
+  const canStop =
+    !stopping && (starting || isStoppableStatus(runStatus?.status));
+
+  const cliState = cliConnectionState(capability, cliProbing);
 
   return (
     <div className="tiamat-shell" data-testid="tiamat-shell">
       <header className="shell-header">
-        <h1>Tiamat</h1>
-        <p className="shell-tagline">
-          Pick input, pick output, watch the agents work.
-        </p>
+        <div className="shell-header-copy">
+          <h1>Tiamat</h1>
+          <p className="shell-tagline">
+            Pick input, pick output, watch the agents work.
+          </p>
+        </div>
+        <CliStatusLight
+          state={cliState}
+          probing={cliProbing}
+          onRefresh={() => void refreshCli()}
+        />
       </header>
 
       <div className="shell-grid">
@@ -170,15 +246,15 @@ export function Shell() {
           disabled={!canRun}
           onClick={() => void onStart()}
         >
-          {busy ? "Working…" : "Run"}
+          {starting ? "Starting…" : "Run"}
         </button>
         <button
           type="button"
           data-testid="stop-run"
-          disabled={busy || !runStatus || runStatus.status === "idle"}
+          disabled={!canStop}
           onClick={() => void onStop()}
         >
-          Stop
+          {stopping ? "Stopping…" : "Stop"}
         </button>
         {error && (
           <p className="error" data-testid="shell-error">

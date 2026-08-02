@@ -70,20 +70,24 @@ pub fn start_run(app: AppHandle, request: StartRunRequest) -> Result<StartRunRes
         *slot = None;
     }
 
-    // Preflight on the calling thread so we can fail fast before spawning.
-    let preflight = intake::run_preflight(&request.input_paths, IntakeLimits::default())
-        .map_err(|e| e.to_string())?;
-    if !preflight.blockers.is_empty() && !preflight.can_start {
-        // Trust not yet acknowledged — still allow start if the UI confirmed trust.
-        // Callers that need trust must call confirm_intake_trust first.
+    // Prefer the UI-trusted preflight so start returns immediately (Stop stays usable).
+    let cached_preflight = {
+        let guard = state.last_preflight.lock().map_err(|e| e.to_string())?;
+        guard.clone()
+    };
+    if let Some(ref report) = cached_preflight {
+        if !report.can_start {
+            return Err(
+                "intake is not trusted yet; acknowledge trust in Intake before starting".into(),
+            );
+        }
     }
-    *state.last_preflight.lock().map_err(|e| e.to_string())? = Some(preflight.clone());
 
     let run_id = {
         let store = state.store.lock().map_err(|e| e.to_string())?;
         let id = Uuid::new_v4();
         store
-            .create_run(id, "tiamat-run", "created")
+            .create_run(id, "tiamat-run", "started")
             .map_err(|e| e.to_string())?;
         id
     };
@@ -95,10 +99,63 @@ pub fn start_run(app: AppHandle, request: StartRunRequest) -> Result<StartRunRes
     let app_for_thread = app.clone();
     let fake_mode = request.fake_cli_mode.clone();
     let max_concurrent = request.max_concurrent.unwrap_or(2).clamp(1, 4);
+    let input_paths = request.input_paths.clone();
+
+    // Register the handle before any slow work so Stop can cancel during preflight.
+    *state.orchestrator.lock().map_err(|e| e.to_string())? = Some(OrchestratorHandle {
+        cancel: Arc::clone(&cancel),
+        run_id,
+        join: None,
+    });
 
     let join = thread::Builder::new()
         .name(format!("tiamat-run-{run_id}"))
         .spawn(move || {
+            let preflight = match cached_preflight {
+                Some(report) => report,
+                None => match intake::run_preflight(&input_paths, IntakeLimits::default()) {
+                    Ok(report) => {
+                        if !report.can_start {
+                            let msg = "preflight cannot start (trust/blockers)";
+                            let _ = set_run_status(&app_for_thread, run_id, "failed");
+                            let _ = emit_run_event(
+                                &app_for_thread,
+                                run_id,
+                                "run.failed",
+                                EventLevel::Error,
+                                msg.into(),
+                                serde_json::json!({ "runId": run_id, "error": msg }),
+                            );
+                            return;
+                        }
+                        let state = app_for_thread.state::<AppState>();
+                        let _ = state
+                            .last_preflight
+                            .lock()
+                            .map(|mut g| *g = Some(report.clone()));
+                        report
+                    }
+                    Err(err) => {
+                        let msg = err.to_string();
+                        let _ = set_run_status(&app_for_thread, run_id, "failed");
+                        let _ = emit_run_event(
+                            &app_for_thread,
+                            run_id,
+                            "run.failed",
+                            EventLevel::Error,
+                            format!("Preflight failed: {msg}"),
+                            serde_json::json!({ "runId": run_id, "error": msg }),
+                        );
+                        return;
+                    }
+                },
+            };
+
+            if cancel_for_thread.load(Ordering::SeqCst) {
+                let _ = mark_cancelled(&app_for_thread, run_id);
+                return;
+            }
+
             if let Err(err) = run_supervisor(
                 app_for_thread.clone(),
                 run_id,
@@ -122,11 +179,13 @@ pub fn start_run(app: AppHandle, request: StartRunRequest) -> Result<StartRunRes
         })
         .map_err(|e| format!("failed to spawn orchestrator: {e}"))?;
 
-    *state.orchestrator.lock().map_err(|e| e.to_string())? = Some(OrchestratorHandle {
-        cancel,
-        run_id,
-        join: Some(join),
-    });
+    if let Ok(mut slot) = state.orchestrator.lock() {
+        if let Some(handle) = slot.as_mut() {
+            if handle.run_id == run_id {
+                handle.join = Some(join);
+            }
+        }
+    }
 
     Ok(StartRunResult {
         run_id,
@@ -140,6 +199,8 @@ pub fn cancel_active_run(app: &AppHandle) -> Result<RunStatusSnapshot, String> {
     let state = app.state::<AppState>();
     let mut slot = state.orchestrator.lock().map_err(|e| e.to_string())?;
     let Some(handle) = slot.as_mut() else {
+        // Still force-kill any stray hosted processes so Stop always clears agents.
+        state.process_host.cancel_all(true);
         return Ok(RunStatusSnapshot {
             run_id: None,
             status: "idle".into(),
@@ -155,10 +216,13 @@ pub fn cancel_active_run(app: &AppHandle) -> Result<RunStatusSnapshot, String> {
     let run_id = handle.run_id();
     drop(slot);
 
+    // Kill agents before touching the DB lock — architect/phase workers may hold Store
+    // for the full Cursor CLI duration, and Stop must not wait on that.
+    state.process_host.cancel_all_for_run(run_id, true);
+    state.process_host.cancel_all(true);
+
     let store = state.store.lock().map_err(|e| e.to_string())?;
     let _ = store.set_run_status(run_id, "cancelling");
-    state.process_host.cancel_all_for_run(run_id, false);
-
     snapshot_from_store(&store, run_id, &state)
 }
 
@@ -301,20 +365,21 @@ fn run_supervisor(
 
     let architect = {
         let state = app.state::<AppState>();
-        let store = state.store.lock().map_err(|e| e.to_string())?;
+        // Sidecar DB connection: do not hold AppState.store across the long Cursor CLI call,
+        // or Stop / status polling deadlock behind that mutex.
+        let store = open_run_store_sidecar(&state)?;
         let result = run_architect_pipeline(ArchitectPipelineRequest {
             run_id,
             preflight: &preflight,
             workspace: &mut workspace,
             capability: &capability,
             executable_override: None,
-            fake_cli_mode: None,
+            fake_cli_mode: fake_cli_mode.as_deref(),
             host: Some(HostedSpawnContext {
                 store: &store,
                 host: &state.process_host,
             }),
         });
-        drop(store);
         *state.last_workspace.lock().map_err(|e| e.to_string())? = Some(workspace.clone());
         *state.last_architect.lock().map_err(|e| e.to_string())? = Some(result.clone());
         if let Some(plan) = result.plan.clone() {
@@ -590,7 +655,7 @@ fn run_phase_worker(
 
     let state = app.state::<AppState>();
     let outcome = {
-        let store = match state.store.lock() {
+        let store = match open_run_store_sidecar(&state) {
             Ok(s) => s,
             Err(e) => {
                 return WorkerOutcome {
@@ -599,7 +664,7 @@ fn run_phase_worker(
                     success: false,
                     failure_kind: Some(FailureKind::Other),
                     progress_useful: false,
-                    message: format!("store lock poisoned: {e}"),
+                    message: e,
                 };
             }
         };
@@ -731,6 +796,19 @@ fn apply_worker_outcome(app: &AppHandle, outcome: WorkerOutcome) -> Result<(), S
         )?;
     }
     Ok(())
+}
+
+fn open_run_store_sidecar(state: &AppState) -> Result<crate::db::Store, String> {
+    let (db_path, artifact_root) = {
+        let store = state.store.lock().map_err(|e| e.to_string())?;
+        let db_path = store
+            .db_path()
+            .ok_or_else(|| "cannot open sidecar store for in-memory DB".to_string())?
+            .to_path_buf();
+        let artifact_root = store.artifact_root().to_path_buf();
+        (db_path, artifact_root)
+    };
+    crate::db::Store::open(db_path, artifact_root).map_err(|e| e.to_string())
 }
 
 fn complete_attempt_safe(

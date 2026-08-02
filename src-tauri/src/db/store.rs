@@ -15,6 +15,7 @@ const BUSY_TIMEOUT_MS: i64 = 5_000;
 
 pub struct Store {
     conn: Connection,
+    db_path: Option<PathBuf>,
     artifact_root: PathBuf,
 }
 
@@ -34,6 +35,7 @@ impl Store {
 
         Ok(Self {
             conn,
+            db_path: Some(db_path.to_path_buf()),
             artifact_root,
         })
     }
@@ -46,6 +48,7 @@ impl Store {
         migrations::migrate(&conn)?;
         Ok(Self {
             conn,
+            db_path: None,
             artifact_root,
         })
     }
@@ -447,6 +450,10 @@ impl Store {
 
     pub fn artifact_root(&self) -> &Path {
         &self.artifact_root
+    }
+
+    pub fn db_path(&self) -> Option<&Path> {
+        self.db_path.as_deref()
     }
 
     pub(crate) fn conn(&self) -> &Connection {
