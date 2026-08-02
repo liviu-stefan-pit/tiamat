@@ -28,7 +28,14 @@ fn rough_spec_dir() -> PathBuf {
     repo_root().join("fixtures/intake/rough-spec")
 }
 
+/// Serialize git-heavy materialize fixtures to avoid intermittent races.
 static GIT_LOCK: Mutex<()> = Mutex::new(());
+
+fn lock_fixtures() -> std::sync::MutexGuard<'static, ()> {
+    GIT_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 fn probe_fake(mode: &str) -> CursorCapabilityReport {
     invalidate_probe_cache();
@@ -133,7 +140,7 @@ fn architect_command_cannot_implement() {
 
 #[test]
 fn architect_valid_plan_persists_atomic_artifacts_and_graph() {
-    let _guard = GIT_LOCK.lock().unwrap();
+    let _guard = lock_fixtures();
     let parent = tempfile::tempdir().unwrap();
     let run_id = Uuid::new_v4();
     let (preflight, mut workspace) = materialize_rough_spec(run_id, parent.path());
@@ -179,7 +186,7 @@ fn architect_valid_plan_persists_atomic_artifacts_and_graph() {
 
 #[test]
 fn architect_invalid_fails_after_one_repair_with_evidence() {
-    let _guard = GIT_LOCK.lock().unwrap();
+    let _guard = lock_fixtures();
     let parent = tempfile::tempdir().unwrap();
     let run_id = Uuid::new_v4();
     let (preflight, mut workspace) = materialize_rough_spec(run_id, parent.path());
@@ -206,7 +213,7 @@ fn architect_invalid_fails_after_one_repair_with_evidence() {
 
 #[test]
 fn architect_repairable_succeeds_on_resume() {
-    let _guard = GIT_LOCK.lock().unwrap();
+    let _guard = lock_fixtures();
     let parent = tempfile::tempdir().unwrap();
     let run_id = Uuid::new_v4();
     let (preflight, mut workspace) = materialize_rough_spec(run_id, parent.path());
@@ -231,8 +238,8 @@ fn architect_repairable_succeeds_on_resume() {
 }
 
 #[test]
-fn architect_degraded_mode_without_sol() {
-    let _guard = GIT_LOCK.lock().unwrap();
+fn architect_succeeds_without_sol_using_preferred_grok() {
+    let _guard = lock_fixtures();
     let parent = tempfile::tempdir().unwrap();
     let run_id = Uuid::new_v4();
     let (preflight, mut workspace) = materialize_rough_spec(run_id, parent.path());
@@ -247,11 +254,13 @@ fn architect_degraded_mode_without_sol() {
         executable_override: Some(&format!("node|{}", fake_agent_js().display())),
         host: None,
     });
+    // Architect prefers Cursor Grok High; missing SOL is not degraded mode.
     assert!(result.ok, "{:?}", result.error);
-    assert!(result.degraded_mode);
+    assert!(!result.degraded_mode);
     assert_eq!(
         result.model_selection.selected_model,
-        ARCHITECT_FALLBACK_MODEL
+        ARCHITECT_PREFERRED_MODEL
     );
+    assert_eq!(ARCHITECT_FALLBACK_MODEL, ARCHITECT_PREFERRED_MODEL);
     std::env::remove_var("TIAMAT_FAKE_CLI_MODE");
 }

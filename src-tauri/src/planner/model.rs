@@ -87,4 +87,13 @@ composer-2.5 - Composer 2.5
         assert!(sel.available_models.iter().all(|id| !id.contains(" - ")));
         assert_eq!(ARCHITECT_FALLBACK_MODEL, ARCHITECT_PREFERRED_MODEL);
     }
+
+    #[test]
+    fn degraded_when_only_fuzzy_grok_high_available() {
+        let sel =
+            select_architect_model(&[model("composer-2.5"), model("cursor-grok-high")]).unwrap();
+        assert_eq!(sel.selected_model, "cursor-grok-high");
+        assert!(sel.degraded);
+        assert!(sel.reason.contains("unavailable"));
+    }
 }
