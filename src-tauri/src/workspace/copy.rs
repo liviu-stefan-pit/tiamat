@@ -14,11 +14,33 @@ pub struct CopyResult {
 }
 
 /// Guarded recursive copy that skips heavy/ignored directories and does not follow escape symlinks.
+/// When `source` is a single file, creates `dest` as a directory and copies the file into it.
 pub fn guarded_copy(source: &Path, dest: &Path, approved_roots: &[PathBuf]) -> WorkspaceResult<()> {
     if dest.exists() {
         return Err(WorkspaceError::Message(format!(
             "copy destination exists: {}",
             dest.display()
+        )));
+    }
+    let source_meta = fs::symlink_metadata(source)?;
+    if source_meta.file_type().is_symlink() {
+        return Err(WorkspaceError::Message(format!(
+            "refusing to copy symlink root: {}",
+            source.display()
+        )));
+    }
+    if source_meta.is_file() {
+        fs::create_dir_all(dest)?;
+        let name = source
+            .file_name()
+            .ok_or_else(|| WorkspaceError::Message("source file has no name".into()))?;
+        fs::copy(source, dest.join(name))?;
+        return Ok(());
+    }
+    if !source_meta.is_dir() {
+        return Err(WorkspaceError::Message(format!(
+            "unsupported source type: {}",
+            source.display()
         )));
     }
     fs::create_dir_all(dest)?;
@@ -122,6 +144,20 @@ pub fn materialize_non_git_project(
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn guarded_copy_copies_single_file_into_dest_dir() {
+        let dir = tempdir().unwrap();
+        let src = dir.path().join("Master Plan.md");
+        fs::write(&src, "# plan\n").unwrap();
+        let dest = dir.path().join("notes-dest");
+        guarded_copy(&src, &dest, std::slice::from_ref(&src)).unwrap();
+        assert!(dest.is_dir());
+        assert_eq!(
+            fs::read_to_string(dest.join("Master Plan.md")).unwrap(),
+            "# plan\n"
+        );
+    }
 
     #[test]
     fn guarded_copy_skips_node_modules() {

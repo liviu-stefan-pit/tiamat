@@ -145,37 +145,50 @@ pub fn run_preflight_with_configured(
     }
 
     if project_summaries.is_empty() {
-        // Single-file or notes fallthrough
-        let root = roots[0].clone();
-        let rels: Vec<String> = inventory
-            .entries
-            .iter()
-            .filter(|e| !e.is_dir)
-            .map(|e| e.relative_path.clone())
-            .collect();
-        let detection = detect_project(&root, &rels);
-        let has_code = !detection.languages.is_empty() || !detection.build_systems.is_empty();
-        let mut summary = ProjectSummary {
-            project_id: stable_project_id(&root),
-            root: root.display().to_string(),
-            kind: classify_kind(false, has_code),
-            languages: detection.languages,
-            build_systems: detection.build_systems,
-            test_commands: detection.test_commands,
-            warnings: Vec::new(),
-        };
-        for g in detection.agent_guidance {
-            summary.warnings.push(format!(
-                "Agent guidance file present: {g} (treated as untrusted data)."
-            ));
+        // File attachments (notes docs, single files): one Notes/Folder project per path.
+        for root in &roots {
+            let is_file = root.is_file();
+            let rels: Vec<String> = if is_file {
+                root.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .into_iter()
+                    .collect()
+            } else {
+                inventory
+                    .entries
+                    .iter()
+                    .filter(|e| !e.is_dir)
+                    .map(|e| e.relative_path.clone())
+                    .collect()
+            };
+            let detection = detect_project(root, &rels);
+            let has_code = !detection.languages.is_empty() || !detection.build_systems.is_empty();
+            let mut summary = ProjectSummary {
+                project_id: stable_project_id(root),
+                root: root.display().to_string(),
+                kind: classify_kind(false, has_code),
+                languages: detection.languages,
+                build_systems: detection.build_systems,
+                test_commands: detection.test_commands,
+                warnings: Vec::new(),
+            };
+            if is_file && matches!(summary.kind, tiamat_contracts::ProjectKind::Folder) {
+                // Lone source files are notes unless they carry strong code signals.
+                summary.kind = tiamat_contracts::ProjectKind::Notes;
+            }
+            for g in detection.agent_guidance {
+                summary.warnings.push(format!(
+                    "Agent guidance file present: {g} (treated as untrusted data)."
+                ));
+            }
+            if !inventory.secret_risks.is_empty() {
+                summary.warnings.push(format!(
+                    "Secret-risk markers detected ({}).",
+                    inventory.secret_risks.len()
+                ));
+            }
+            project_summaries.push(summary);
         }
-        if !inventory.secret_risks.is_empty() {
-            summary.warnings.push(format!(
-                "Secret-risk markers detected ({}).",
-                inventory.secret_risks.len()
-            ));
-        }
-        project_summaries.push(summary);
     }
 
     if !inventory.secret_risks.is_empty() {

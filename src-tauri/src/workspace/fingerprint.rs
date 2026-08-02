@@ -47,6 +47,27 @@ pub fn fingerprints_equal(a: &SourceFingerprint, b: &SourceFingerprint) -> bool 
 }
 
 fn hash_tree(root: &Path) -> WorkspaceResult<String> {
+    let meta = fs::symlink_metadata(root)?;
+    if meta.file_type().is_symlink() {
+        let target = fs::read_link(root)
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        return Ok(hash_bytes(format!("symlink:{}", target).as_bytes()));
+    }
+    if meta.is_file() {
+        let bytes = fs::read(root)?;
+        let name = root
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "file".into());
+        let mut hasher = Sha256::new();
+        hasher.update(name.as_bytes());
+        hasher.update(b"\0");
+        hasher.update(hash_bytes(&bytes).as_bytes());
+        hasher.update(b"\n");
+        return Ok(hex::encode(hasher.finalize()));
+    }
+
     let mut entries: Vec<(String, String)> = Vec::new();
     walk_files(root, root, &mut entries)?;
     entries.sort_by(|a, b| a.0.cmp(&b.0));

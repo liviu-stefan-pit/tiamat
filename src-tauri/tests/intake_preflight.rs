@@ -225,7 +225,36 @@ fn single_file_intake_works() {
         report.manifest.sources[0].kind,
         tiamat_contracts::SourceKind::File
     );
+    assert_eq!(report.manifest.projects.len(), 1);
+    assert_eq!(
+        report.manifest.projects[0].kind,
+        tiamat_contracts::ProjectKind::Notes
+    );
     assert!(!report.can_start);
+}
+
+#[test]
+fn multi_file_notes_intake_creates_project_per_file() {
+    let dir = tempdir().unwrap();
+    let a = dir.path().join("AI Skills.md");
+    let b = dir.path().join("Master Plan.md");
+    write(&a, "# skills\n");
+    write(&b, "# plan\n");
+    let report = run_preflight(
+        &[
+            a.to_string_lossy().to_string(),
+            b.to_string_lossy().to_string(),
+        ],
+        IntakeLimits::default(),
+    )
+    .unwrap();
+    assert_eq!(report.manifest.sources.len(), 2);
+    assert_eq!(report.manifest.projects.len(), 2);
+    assert!(report
+        .manifest
+        .projects
+        .iter()
+        .all(|p| p.kind == tiamat_contracts::ProjectKind::Notes));
 }
 
 #[test]

@@ -266,6 +266,73 @@ fn non_git_folder_gets_initialized_baseline() {
 }
 
 #[test]
+fn attached_markdown_files_materialize_as_notes() {
+    let _guard = lock_fixtures();
+    let dir = tempdir().unwrap();
+    let a = dir.path().join("AI Skills and Rules Development.md");
+    let b = dir
+        .path()
+        .join("Master Plan_ Skill & Rule Evaluation Engine.md");
+    write(&a, "# skills\n");
+    write(&b, "# master\n");
+
+    let intake = IntakeManifest {
+        schema_version: tiamat_contracts::CURRENT_SCHEMA_VERSION,
+        intake_id: Uuid::new_v4(),
+        sources: vec![
+            IntakeSource {
+                path: a.display().to_string(),
+                kind: SourceKind::File,
+                read_only: true,
+            },
+            IntakeSource {
+                path: b.display().to_string(),
+                kind: SourceKind::File,
+                read_only: true,
+            },
+        ],
+        projects: vec![
+            ProjectSummary {
+                project_id: "skills".into(),
+                root: a.display().to_string(),
+                kind: ProjectKind::Notes,
+                languages: vec![],
+                build_systems: vec![],
+                test_commands: vec![],
+                warnings: vec![],
+            },
+            ProjectSummary {
+                project_id: "master-plan".into(),
+                root: b.display().to_string(),
+                kind: ProjectKind::Notes,
+                languages: vec![],
+                build_systems: vec![],
+                test_commands: vec![],
+                warnings: vec![],
+            },
+        ],
+        inventory_artifact: "inv".into(),
+    };
+
+    let manifest = materialize_run_workspace(MaterializeRequest {
+        run_id: Uuid::new_v4(),
+        intake,
+        managed_parent: dir.path().join("managed"),
+        create_internal_worktrees: false,
+    })
+    .unwrap();
+
+    assert_eq!(manifest.projects.len(), 2);
+    assert_eq!(manifest.notes_roots.len(), 2);
+    let skills = Path::new(&manifest.projects[0].managed_root);
+    let master = Path::new(&manifest.projects[1].managed_root);
+    assert!(skills.join("AI Skills and Rules Development.md").is_file());
+    assert!(master
+        .join("Master Plan_ Skill & Rule Evaluation Engine.md")
+        .is_file());
+}
+
+#[test]
 fn checkpoint_quarantine_export_and_retention() {
     let _guard = lock_fixtures();
     let dir = tempdir().unwrap();
