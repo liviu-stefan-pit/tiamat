@@ -4,7 +4,7 @@ Deep companion to [../user/troubleshooting.md](../user/troubleshooting.md) and M
 
 ## CLI / auth / models
 
-1. Resolution order: configured path → `TIAMAT_CURSOR_CLI` → PATH (`agent` / `cursor-agent`) → known install paths.
+1. Resolution order: configured path → `TIAMAT_CURSOR_CLI` → PATH (`agent` / `cursor-agent`) → known install paths (including Cursor IDE `globalStorage` agent-cli).
 2. Probe `--version`, `--help`, `--list-models` before unattended runs.
 3. Auth failures stop before planning; show `agent status` guidance.
 4. Missing preferred models → recorded Composer/Grok fallback only.

@@ -509,7 +509,14 @@ pub fn preview_cursor_command(
     let capability = if let Some(cached) = capability {
         cached
     } else {
-        let report = crate::cursor::probe_cursor_capability();
+        let configured = {
+            let store = state.store.lock().map_err(|e| e.to_string())?;
+            store
+                .get_app_settings()
+                .map_err(|e| e.to_string())?
+                .cursor_cli_path
+        };
+        let report = crate::cursor::probe_cursor_capability_with_configured(configured.as_deref());
         *state.last_cursor.lock().map_err(|e| e.to_string())? = Some(report.clone());
         report
     };
@@ -693,12 +700,20 @@ pub fn run_architect_pipeline(
         .ok_or_else(|| "workspace must be materialized before architect".to_string())?;
 
     let capability = {
+        let configured = {
+            let store = state.store.lock().map_err(|e| e.to_string())?;
+            store
+                .get_app_settings()
+                .map_err(|e| e.to_string())?
+                .cursor_cli_path
+        };
         let guard = state.last_cursor.lock().map_err(|e| e.to_string())?;
         if let Some(cached) = guard.clone() {
             cached
         } else {
             drop(guard);
-            let report = crate::cursor::probe_cursor_capability();
+            let report =
+                crate::cursor::probe_cursor_capability_with_configured(configured.as_deref());
             *state.last_cursor.lock().map_err(|e| e.to_string())? = Some(report.clone());
             report
         }

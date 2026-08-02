@@ -12,7 +12,7 @@ use tiamat_contracts::EventLevel;
 use uuid::Uuid;
 
 use crate::app::commands::{AppState, EVENT_CHANNEL};
-use crate::cursor::{probe_cursor_capability, TimeoutSettings};
+use crate::cursor::{probe_cursor_capability_with_configured, TimeoutSettings};
 use crate::db::NewEvent;
 use crate::executor::{execute_phase, ExecutePhaseRequest, ExecutionMode};
 use crate::intake::{self, IntakeLimits};
@@ -285,17 +285,17 @@ fn run_supervisor(
     set_run_status(&app, run_id, "planning")?;
     let capability = {
         let state = app.state::<AppState>();
-        let report = {
-            let guard = state.last_cursor.lock().map_err(|e| e.to_string())?;
-            if let Some(cached) = guard.clone() {
-                cached
-            } else {
-                drop(guard);
-                let report = probe_cursor_capability();
-                *state.last_cursor.lock().map_err(|e| e.to_string())? = Some(report.clone());
-                report
-            }
+        let configured = {
+            let store = state.store.lock().map_err(|e| e.to_string())?;
+            store
+                .get_app_settings()
+                .map_err(|e| e.to_string())?
+                .cursor_cli_path
         };
+        // Fresh probe each run so a stale Absent/wrong-binary cache cannot block planning.
+        crate::cursor::invalidate_probe_cache();
+        let report = probe_cursor_capability_with_configured(configured.as_deref());
+        *state.last_cursor.lock().map_err(|e| e.to_string())? = Some(report.clone());
         report
     };
 

@@ -145,7 +145,80 @@ fn known_install_paths(environ: &HashMap<String, String>) -> Vec<String> {
             found.push(candidate.to_string_lossy().to_string());
         }
     }
+
+    for candidate in ide_bundled_agent_paths(environ) {
+        let path = candidate.to_string_lossy().to_string();
+        if candidate.is_file() && !found.iter().any(|p| p == &path) {
+            found.push(path);
+        }
+    }
     found
+}
+
+/// Cursor IDE ships `cursor-agent` under globalStorage (not always on PATH).
+fn ide_bundled_agent_paths(environ: &HashMap<String, String>) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for cursor_root in cursor_ide_config_roots(environ) {
+        let agent_cli = cursor_root
+            .join("User")
+            .join("globalStorage")
+            .join("anysphere.cursor-agent-worker")
+            .join("agent-cli");
+        out.push(agent_cli.join(".local").join("bin").join("cursor-agent"));
+        out.push(agent_cli.join(".local").join("bin").join("agent"));
+        let versions = agent_cli
+            .join(".local")
+            .join("share")
+            .join("cursor-agent")
+            .join("versions");
+        if let Some(version) = latest_cursor_version_dir(&versions) {
+            out.push(versions.join(&version).join("cursor-agent"));
+            out.push(versions.join(&version).join("agent"));
+        }
+    }
+    out
+}
+
+fn cursor_ide_config_roots(environ: &HashMap<String, String>) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    let push_unique = |roots: &mut Vec<PathBuf>, path: PathBuf| {
+        if !roots.iter().any(|p| p == &path) {
+            roots.push(path);
+        }
+    };
+
+    if let Some(xdg) = environ
+        .get("XDG_CONFIG_HOME")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        push_unique(&mut roots, Path::new(xdg).join("Cursor"));
+    }
+
+    if let Some(home) = environ
+        .get("HOME")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        push_unique(&mut roots, Path::new(home).join(".config").join("Cursor"));
+        push_unique(
+            &mut roots,
+            Path::new(home)
+                .join("Library")
+                .join("Application Support")
+                .join("Cursor"),
+        );
+    }
+
+    if let Some(appdata) = environ
+        .get("APPDATA")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        push_unique(&mut roots, Path::new(appdata).join("Cursor"));
+    }
+
+    roots
 }
 
 /// Strip lone `-` argv tokens that Windows PowerShell `-File` rejects
@@ -322,6 +395,46 @@ mod tests {
             }
         });
         assert_eq!(resolved.as_deref(), Some("/usr/bin/agent"));
+    }
+
+    #[test]
+    fn discovers_ide_bundled_cursor_agent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let version = "2026.07.23-e383d2b";
+        let bin = tmp
+            .path()
+            .join(".config")
+            .join("Cursor")
+            .join("User")
+            .join("globalStorage")
+            .join("anysphere.cursor-agent-worker")
+            .join("agent-cli")
+            .join(".local")
+            .join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let agent = bin.join("cursor-agent");
+        std::fs::write(&agent, b"#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&agent).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&agent, perms).unwrap();
+        }
+        let versions = bin
+            .parent()
+            .unwrap()
+            .join("share")
+            .join("cursor-agent")
+            .join("versions")
+            .join(version);
+        std::fs::create_dir_all(&versions).unwrap();
+        std::fs::write(versions.join("cursor-agent"), b"#!/bin/sh\n").unwrap();
+
+        let mut env = HashMap::new();
+        env.insert("HOME".into(), tmp.path().to_string_lossy().into_owned());
+        let resolved = resolve_cursor_executable(&env, &|_| None);
+        assert_eq!(resolved.as_deref(), Some(agent.to_string_lossy().as_ref()));
     }
 
     #[test]

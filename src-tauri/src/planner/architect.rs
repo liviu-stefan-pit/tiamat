@@ -283,8 +283,35 @@ fn gate_architect_capability(
     if test_override {
         return Ok(());
     }
+    match capability.status {
+        crate::cursor::CursorCapabilityStatus::Absent => {
+            return Err(if capability.message.trim().is_empty() {
+                "Cursor agent CLI not found. Install `agent`/`cursor-agent`, set TIAMAT_CURSOR_CLI, or configure the path in Settings.".into()
+            } else {
+                capability.message.clone()
+            });
+        }
+        crate::cursor::CursorCapabilityStatus::Error
+        | crate::cursor::CursorCapabilityStatus::UnsupportedVersion => {
+            return Err(format!(
+                "architect blocked: {}",
+                if capability.message.trim().is_empty() {
+                    "Cursor CLI probe failed".into()
+                } else {
+                    capability.message.clone()
+                }
+            ));
+        }
+        crate::cursor::CursorCapabilityStatus::Available => {}
+    }
     if !capability.features.mode_plan {
-        return Err("Cursor CLI does not advertise plan mode; architect cannot start".into());
+        let exe = capability
+            .executable
+            .as_deref()
+            .unwrap_or("unknown executable");
+        return Err(format!(
+            "Cursor CLI at {exe} does not advertise plan mode (--mode plan); architect cannot start. Point Settings at the `agent` / `cursor-agent` CLI, not the Cursor IDE binary."
+        ));
     }
     match capability.auth {
         CursorAuthStatus::Unauthenticated => {
