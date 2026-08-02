@@ -71,9 +71,6 @@ mod tests {
     fn parse_env_rejects_empty_and_floors_tiny() {
         assert_eq!(parse_env_ms("__TIAMAT_NEVER_SET__"), None);
         // Direct unit of the helper: floor at 1s.
-        assert_eq!(
-            "50".parse::<u64>().ok().map(|v| v.max(1_000)),
-            Some(1_000)
-        );
+        assert_eq!("50".parse::<u64>().ok().map(|v| v.max(1_000)), Some(1_000));
     }
 }
