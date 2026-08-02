@@ -149,12 +149,29 @@ pub struct RootValidationResult {
 
 impl RunWorkspaceManifest {
     pub fn validate_write_root(&self, candidate: &str) -> Result<(), String> {
+        // Notes snapshots are read-only intake; only NonGit/Git projects are writable.
         let ok = self.projects.iter().any(|p| {
-            crate::workspace::roots::is_within_managed(&p.write_root, candidate)
-                || crate::workspace::roots::is_within_managed(&p.managed_root, candidate)
+            !matches!(p.kind, ManagedProjectKind::NotesSnapshot)
+                && (crate::workspace::roots::is_within_managed(&p.write_root, candidate)
+                    || crate::workspace::roots::is_within_managed(&p.managed_root, candidate))
         });
         if ok {
             Ok(())
+        } else if self
+            .notes_roots
+            .iter()
+            .any(|n| crate::workspace::roots::is_within_managed(n, candidate) || n == candidate)
+            || self.projects.iter().any(|p| {
+                matches!(p.kind, ManagedProjectKind::NotesSnapshot)
+                    && (crate::workspace::roots::is_within_managed(&p.write_root, candidate)
+                        || crate::workspace::roots::is_within_managed(&p.managed_root, candidate)
+                        || p.write_root == candidate
+                        || p.managed_root == candidate)
+            })
+        {
+            Err(format!(
+                "notes roots are read-only; cannot be writeRoots: {candidate}"
+            ))
         } else {
             Err(format!("write root not in managed projects: {candidate}"))
         }
@@ -168,14 +185,16 @@ impl RunWorkspaceManifest {
             if project
                 .read_roots
                 .iter()
-                .any(|r| crate::workspace::roots::is_within_managed(r, candidate))
+                .any(|r| crate::workspace::roots::is_within_managed(r, candidate) || r == candidate)
                 || crate::workspace::roots::is_within_managed(&project.managed_root, candidate)
+                || crate::workspace::roots::is_within_managed(&project.source_root, candidate)
+                || project.source_root == candidate
             {
                 return Ok(());
             }
         }
         for notes in &self.notes_roots {
-            if crate::workspace::roots::is_within_managed(notes, candidate) {
+            if crate::workspace::roots::is_within_managed(notes, candidate) || notes == candidate {
                 return Ok(());
             }
         }

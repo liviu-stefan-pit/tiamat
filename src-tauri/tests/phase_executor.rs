@@ -196,6 +196,8 @@ fn unit_decisions_prompt_recovery_and_result() {
     assert!(prompt.contains("immutable"));
     let recovery = assemble_recovery_prompt(&phase, "partial timeout");
     assert!(recovery.contains("Resume the same assigned phase"));
+    assert!(recovery.contains("Write exclusively inside assigned write roots"));
+    assert!(recovery.contains("ORIGINAL PHASE PROMPT"));
     assert!(matches!(
         decide_partial_recovery(true, true, RollbackStrategy::Restore, None, None),
         PartialRecoveryDecision::Resume { .. }

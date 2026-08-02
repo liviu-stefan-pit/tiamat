@@ -10,7 +10,7 @@ mod types;
 
 pub use error::{DbError, DbResult};
 pub use migrations::{current_version, latest_migration_version, migrate, migrate_up_to};
-pub use store::Store;
+pub use store::{is_sqlite_busy, with_busy_retry, Store};
 pub use types::{ArtifactRecord, NewEvent, RunRecord};
 
 use serde_json::json;

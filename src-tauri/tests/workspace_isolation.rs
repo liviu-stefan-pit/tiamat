@@ -235,13 +235,14 @@ fn nested_and_multi_repo_get_distinct_managed_roots() {
 }
 
 #[test]
-fn non_git_folder_gets_initialized_baseline() {
+fn notes_only_materializes_flat_product_root() {
     let _guard = lock_fixtures();
     let dir = tempdir().unwrap();
     let source = dir.path().join("notes-only");
     fs::create_dir_all(&source).unwrap();
     write(&source.join("NOTES.md"), "brainstorm\n");
     let before_bytes = fs::read(source.join("NOTES.md")).unwrap();
+    let output = dir.path().join("out");
 
     let intake = intake_for(vec![(
         "notes-only".into(),
@@ -251,16 +252,35 @@ fn non_git_folder_gets_initialized_baseline() {
     let manifest = materialize_run_workspace(MaterializeRequest {
         run_id: Uuid::new_v4(),
         intake,
-        managed_parent: dir.path().join("managed"),
+        managed_parent: output.clone(),
         create_internal_worktrees: false,
     })
     .unwrap();
 
-    assert_eq!(manifest.projects.len(), 1);
+    assert_eq!(manifest.projects.len(), 2); // notes snapshot + default greenfield `app`
     assert!(!manifest.notes_roots.is_empty());
-    let managed = Path::new(&manifest.projects[0].managed_root);
-    assert!(managed.join(".git").exists());
-    assert!(managed.join("NOTES.md").exists());
+    assert_eq!(manifest.managed_run_root, output.display().to_string());
+    assert_eq!(manifest.control_root, output.display().to_string());
+    assert!(!output.join(format!("run-{}", manifest.run_id)).exists());
+    assert!(!output.join("projects").exists());
+    assert!(!output.join("notes").exists());
+    assert!(output.join(".tiamat").join("manifest.json").is_file());
+    assert!(output.join(".tiamat").join("README.md").is_file());
+    assert!(output.join(".git").is_dir());
+
+    let notes = manifest
+        .projects
+        .iter()
+        .find(|p| p.project_id == "notes-only")
+        .expect("notes project");
+    let app = manifest
+        .projects
+        .iter()
+        .find(|p| p.project_id == "app")
+        .expect("default greenfield app");
+    // Notes stay at the original intake path (no copy into output).
+    assert_eq!(notes.managed_root, source.display().to_string());
+    assert_eq!(app.write_root, output.display().to_string());
     assert_eq!(fs::read(source.join("NOTES.md")).unwrap(), before_bytes);
     assert!(!source.join(".git").exists());
 }
@@ -314,22 +334,42 @@ fn attached_markdown_files_materialize_as_notes() {
         inventory_artifact: "inv".into(),
     };
 
+    let output = dir.path().join("managed");
     let manifest = materialize_run_workspace(MaterializeRequest {
         run_id: Uuid::new_v4(),
         intake,
-        managed_parent: dir.path().join("managed"),
+        managed_parent: output.clone(),
         create_internal_worktrees: false,
     })
     .unwrap();
 
-    assert_eq!(manifest.projects.len(), 2);
+    assert_eq!(manifest.projects.len(), 3); // 2 notes + default greenfield `app`
     assert_eq!(manifest.notes_roots.len(), 2);
-    let skills = Path::new(&manifest.projects[0].managed_root);
-    let master = Path::new(&manifest.projects[1].managed_root);
-    assert!(skills.join("AI Skills and Rules Development.md").is_file());
-    assert!(master
-        .join("Master Plan_ Skill & Rule Evaluation Engine.md")
-        .is_file());
+    assert_eq!(manifest.managed_run_root, output.display().to_string());
+    assert_eq!(manifest.control_root, output.display().to_string());
+    assert!(output.join(".tiamat").join("manifest.json").is_file());
+    assert!(!output.join("notes").exists());
+    assert!(!output.join("projects").exists());
+
+    let skills = &manifest
+        .projects
+        .iter()
+        .find(|p| p.project_id == "skills")
+        .unwrap()
+        .managed_root;
+    let master = &manifest
+        .projects
+        .iter()
+        .find(|p| p.project_id == "master-plan")
+        .unwrap()
+        .managed_root;
+    // Original file paths (no copy into output).
+    assert_eq!(skills, &a.display().to_string());
+    assert_eq!(master, &b.display().to_string());
+    assert!(a.is_file());
+    assert!(b.is_file());
+    assert!(manifest.projects.iter().any(|p| p.project_id == "app"
+        && (p.write_root == output.display().to_string())));
 }
 
 #[test]

@@ -365,9 +365,7 @@ fn run_supervisor(
 
     let architect = {
         let state = app.state::<AppState>();
-        // Sidecar DB connection: do not hold AppState.store across the long Cursor CLI call,
-        // or Stop / status polling deadlock behind that mutex.
-        let store = open_run_store_sidecar(&state)?;
+        // Short-lock AppState.store inside ProcessHost — never across the Cursor wait.
         let result = run_architect_pipeline(ArchitectPipelineRequest {
             run_id,
             preflight: &preflight,
@@ -376,7 +374,7 @@ fn run_supervisor(
             executable_override: None,
             fake_cli_mode: fake_cli_mode.as_deref(),
             host: Some(HostedSpawnContext {
-                store: &store,
+                store: &state.store,
                 host: &state.process_host,
             }),
         });
@@ -478,26 +476,33 @@ fn run_supervisor(
         }
 
         // Tick the scheduler for newly-ready phases.
-        let started_phases = {
+        // Do not hold `store` across `emit_run_event` — emit also locks the store
+        // (std::Mutex is not reentrant) and would deadlock the orchestrator loop.
+        let (started_phases, tick_message, tick_started, tick_blocked) = {
             let state = app.state::<AppState>();
             let store = state.store.lock().map_err(|e| e.to_string())?;
             let tick_result = tick(&store, run_id, &available_models, &config, &final_review)
                 .map_err(|e| e.to_string())?;
             let snap = crate::scheduler::snapshot(&store, run_id).map_err(|e| e.to_string())?;
             *state.last_scheduler.lock().map_err(|e| e.to_string())? = Some(snap);
-            emit_run_event(
-                &app,
-                run_id,
-                "scheduler.tick",
-                EventLevel::Info,
-                tick_result.message.clone(),
-                serde_json::json!({
-                    "started": tick_result.started,
-                    "blocked": tick_result.blocked,
-                }),
-            )?;
-            tick_result.started
+            (
+                tick_result.started.clone(),
+                tick_result.message,
+                tick_result.started,
+                tick_result.blocked,
+            )
         };
+        emit_run_event(
+            &app,
+            run_id,
+            "scheduler.tick",
+            EventLevel::Info,
+            tick_message,
+            serde_json::json!({
+                "started": tick_started,
+                "blocked": tick_blocked,
+            }),
+        )?;
 
         // Spawn workers for newly started phases that we are not already tracking.
         for phase_id in started_phases {
@@ -654,42 +659,27 @@ fn run_phase_worker(
     );
 
     let state = app.state::<AppState>();
-    let outcome = {
-        let store = match open_run_store_sidecar(&state) {
-            Ok(s) => s,
-            Err(e) => {
-                return WorkerOutcome {
-                    attempt_id,
-                    phase_id,
-                    success: false,
-                    failure_kind: Some(FailureKind::Other),
-                    progress_useful: false,
-                    message: e,
-                };
-            }
-        };
-        execute_phase(ExecutePhaseRequest {
-            run_id,
-            phase_id: &phase_id,
-            attempt_id: Some(attempt_id),
-            plan: &mut plan,
-            workspace: &mut workspace,
-            capability: &capability,
-            model_id: &model_id,
-            mode: ExecutionMode::Fresh,
-            resume_chat_id: None,
-            interruption_report: None,
-            timeout_ms: Some(timeout_ms),
-            executable_override: None,
-            fake_cli_mode: fake_cli_mode.as_deref(),
-            establish_baseline: true,
-            flaky_retry: true,
-            host: Some(HostedSpawnContext {
-                store: &store,
-                host: &state.process_host,
-            }),
-        })
-    };
+    let outcome = execute_phase(ExecutePhaseRequest {
+        run_id,
+        phase_id: &phase_id,
+        attempt_id: Some(attempt_id),
+        plan: &mut plan,
+        workspace: &mut workspace,
+        capability: &capability,
+        model_id: &model_id,
+        mode: ExecutionMode::Fresh,
+        resume_chat_id: None,
+        interruption_report: None,
+        timeout_ms: Some(timeout_ms),
+        executable_override: None,
+        fake_cli_mode: fake_cli_mode.as_deref(),
+        establish_baseline: true,
+        flaky_retry: true,
+        host: Some(HostedSpawnContext {
+            store: &state.store,
+            host: &state.process_host,
+        }),
+    });
 
     match outcome {
         Ok(result) => {
@@ -798,19 +788,6 @@ fn apply_worker_outcome(app: &AppHandle, outcome: WorkerOutcome) -> Result<(), S
     Ok(())
 }
 
-fn open_run_store_sidecar(state: &AppState) -> Result<crate::db::Store, String> {
-    let (db_path, artifact_root) = {
-        let store = state.store.lock().map_err(|e| e.to_string())?;
-        let db_path = store
-            .db_path()
-            .ok_or_else(|| "cannot open sidecar store for in-memory DB".to_string())?
-            .to_path_buf();
-        let artifact_root = store.artifact_root().to_path_buf();
-        (db_path, artifact_root)
-    };
-    crate::db::Store::open(db_path, artifact_root).map_err(|e| e.to_string())
-}
-
 fn complete_attempt_safe(
     app: &AppHandle,
     attempt_id: Uuid,
@@ -819,10 +796,26 @@ fn complete_attempt_safe(
     progress_useful: bool,
 ) -> Result<(), String> {
     let state = app.state::<AppState>();
-    let store = state.store.lock().map_err(|e| e.to_string())?;
-    complete_attempt(&store, attempt_id, result, failure_kind, progress_useful)
-        .map_err(|e| e.to_string())?;
-    Ok(())
+    let mut delay_ms = 25u64;
+    for attempt in 0..8u32 {
+        let outcome = {
+            let store = state.store.lock().map_err(|e| e.to_string())?;
+            complete_attempt(&store, attempt_id, result, failure_kind, progress_useful)
+        };
+        match outcome {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                let msg = e.to_string();
+                if attempt + 1 < 8 && msg.contains("database is locked") {
+                    thread::sleep(Duration::from_millis(delay_ms));
+                    delay_ms = (delay_ms.saturating_mul(2)).min(1_000);
+                    continue;
+                }
+                return Err(msg);
+            }
+        }
+    }
+    Err("complete_attempt: exhausted busy retries".into())
 }
 
 fn set_run_status(app: &AppHandle, run_id: Uuid, status: &str) -> Result<(), String> {
@@ -856,7 +849,6 @@ fn emit_run_event(
     payload: serde_json::Value,
 ) -> Result<(), String> {
     let state = app.state::<AppState>();
-    let store = state.store.lock().map_err(|e| e.to_string())?;
     let event = NewEvent {
         event_id: Uuid::new_v4(),
         run_id,
@@ -870,10 +862,16 @@ fn emit_run_event(
         message: redact_line(&message),
         payload,
     };
-    let envelope = store
-        .append_event_atomic(None, event)
-        .map_err(|e| e.to_string())?;
-    let _ = store.mark_outbox_delivered(&[envelope.event_id]);
+    let envelope = crate::db::with_busy_retry(|| {
+        let store = state
+            .store
+            .lock()
+            .map_err(|e| crate::db::DbError::Validation(format!("store lock poisoned: {e}")))?;
+        let envelope = store.append_event_atomic(None, event.clone())?;
+        let _ = store.mark_outbox_delivered(&[envelope.event_id]);
+        Ok(envelope)
+    })
+    .map_err(|e| e.to_string())?;
     let _ = app.emit(EVENT_CHANNEL, &envelope);
     Ok(())
 }

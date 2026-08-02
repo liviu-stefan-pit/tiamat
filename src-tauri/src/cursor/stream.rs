@@ -119,7 +119,117 @@ fn absorb_event(result: &mut StreamParseResult, event: ParsedStreamEvent) {
     if matches!(event.kind, StreamEventKind::Result) {
         result.terminal_ok = Some(event.ok);
     }
+    // Harvest CreatePlan bodies from raw JSON (plan mode puts MASTER-PLAN here).
+    if let Ok(value) = serde_json::from_str::<Value>(&event.raw_line) {
+        if let Some(plan) = harvest_plan_tool_markdown(&value) {
+            result.plan_markdown = plan;
+        }
+    }
     result.events.push(event);
+}
+
+fn is_plan_tool_name(name: &str) -> bool {
+    let n = name.to_ascii_lowercase().replace(['_', '-'], "");
+    n == "createplan" || n == "writeplan" || n == "updateplan" || n == "editplan"
+}
+
+/// Pull structured MASTER-PLAN markdown out of CreatePlan-style tool arguments.
+fn harvest_plan_tool_markdown(value: &Value) -> Option<String> {
+    // Real Cursor CLI stream-json (2026+):
+    // {"type":"tool_call","tool_call":{"createPlanToolCall":{"args":{"plan":"..."}}}}
+    if let Some(tool_call) = value.get("tool_call").and_then(|v| v.as_object()) {
+        for (key, body) in tool_call {
+            let key_l = key.to_ascii_lowercase();
+            if key_l.contains("createplan")
+                || key_l.contains("writeplan")
+                || key_l == "plantoolcall"
+            {
+                if let Some(plan) = body
+                    .pointer("/args/plan")
+                    .or_else(|| body.pointer("/input/plan"))
+                    .or_else(|| body.pointer("/arguments/plan"))
+                    .and_then(|v| v.as_str())
+                {
+                    let plan = plan.trim();
+                    if !plan.is_empty() {
+                        return Some(plan.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(content) = value.pointer("/message/content").and_then(|v| v.as_array()) {
+        for item in content {
+            if let Some(plan) = plan_from_tool_item(item) {
+                return Some(plan);
+            }
+        }
+    }
+    // Top-level tool_call / tool_use frames with name + input.
+    let type_name = value
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if matches!(
+        type_name.as_str(),
+        "tool_call" | "tool-call" | "tool_use" | "tool-use" | "toolcall"
+    ) {
+        let name = value
+            .get("name")
+            .or_else(|| value.pointer("/tool/name"))
+            .or_else(|| value.get("tool_name"))
+            .or_else(|| value.get("toolName"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if is_plan_tool_name(name) {
+            if let Some(plan) = plan_string_from_args(value) {
+                return Some(plan);
+            }
+        }
+    }
+    None
+}
+
+fn plan_from_tool_item(item: &Value) -> Option<String> {
+    let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("");
+    if !is_plan_tool_name(name) {
+        return None;
+    }
+    plan_string_from_args(item)
+}
+
+fn plan_string_from_args(value: &Value) -> Option<String> {
+    for path in [
+        "/input/plan",
+        "/arguments/plan",
+        "/params/plan",
+        "/input/contents",
+        "/input/body",
+        "/arguments/contents",
+    ] {
+        if let Some(plan) = value.pointer(path).and_then(|v| v.as_str()) {
+            let plan = plan.trim();
+            if plan.len() > 40
+                && (plan.contains("## Phase")
+                    || plan.to_ascii_lowercase().contains("## phase")
+                    || plan.contains("# "))
+            {
+                return Some(plan.to_string());
+            }
+        }
+    }
+    // Nested input object with plan key.
+    if let Some(input) = value.get("input").or_else(|| value.get("arguments")) {
+        if let Some(plan) = input.get("plan").and_then(|v| v.as_str()) {
+            let plan = plan.trim();
+            if !plan.is_empty() {
+                return Some(plan.to_string());
+            }
+        }
+    }
+    None
 }
 
 fn extract_chat_id(value: &Value) -> Option<String> {
@@ -289,5 +399,52 @@ NOT JSON <<<
         let parsed = parse_stream_json(stdout, "", &["fixture-secret-value"]);
         let line = &parsed.events[0].redacted_line;
         assert!(!line.contains("AKIAIOSFODNN7EXAMPLE"));
+    }
+
+    #[test]
+    fn harvests_createplan_from_cli_create_plan_tool_call() {
+        // Actual Cursor agent stream-json shape (plan mode).
+        let stdout = r##"
+{"type":"system","subtype":"init","session_id":"chat-cli"}
+{"type":"tool_call","subtype":"started","call_id":"tool_1","tool_call":{"createPlanToolCall":{"args":{"plan":"# Demo\n\n## Summary\ns\n\n## Assumptions\n- a\n\n## Risks\n- r\n\n## Phase: P01 - Slice\n\nbody","name":"Demo","overview":"o","todos":[]},"toolCallId":"tool_1"}},"session_id":"chat-cli"}
+{"type":"tool_call","subtype":"completed","call_id":"tool_1","tool_call":{"createPlanToolCall":{"args":{"plan":"# Demo\n\n## Summary\ns\n\n## Assumptions\n- a\n\n## Risks\n- r\n\n## Phase: P01 - Slice\n\nbody","name":"Demo","overview":"o","todos":[]},"result":{"success":{}},"toolCallId":"tool_1"}},"session_id":"chat-cli"}
+{"type":"result","subtype":"success","session_id":"chat-cli"}
+"##;
+        let parsed = parse_stream_json(stdout, "", &[]);
+        assert_eq!(parsed.chat_id.as_deref(), Some("chat-cli"));
+        assert!(
+            parsed.plan_markdown.contains("## Phase: P01"),
+            "createPlanToolCall.args.plan must be harvested: {}",
+            parsed.plan_markdown.chars().take(200).collect::<String>()
+        );
+    }
+
+    #[test]
+    fn harvests_createplan_plan_field_from_assistant_tool_use() {
+        // Use r## so embedded "# Title" / "# Demo" do not terminate the raw string.
+        let stdout = r##"
+{"type":"system","subtype":"init","session_id":"chat-plan","model":"cursor-grok-4.5-high"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Drafting the plan now."},{"type":"tool_use","name":"CreatePlan","input":{"name":"Demo","overview":"o","plan":"# Demo\n\n## Summary\ns\n\n## Assumptions\n- a\n\n## Risks\n- r\n\n## Phase: P01 - Slice\n\nbody"}}]}}
+{"type":"result","subtype":"success","session_id":"chat-plan","result":"ok"}
+"##;
+        let parsed = parse_stream_json(stdout, "", &[]);
+        assert_eq!(parsed.chat_id.as_deref(), Some("chat-plan"));
+        assert!(parsed.assistant_text.contains("Drafting the plan"));
+        assert!(
+            parsed.plan_markdown.contains("## Phase: P01"),
+            "CreatePlan.plan must be harvested: {}",
+            parsed.plan_markdown.chars().take(200).collect::<String>()
+        );
+        assert!(!parsed.assistant_text.contains("## Phase: P01"));
+    }
+
+    #[test]
+    fn harvests_createplan_from_top_level_tool_call() {
+        let stdout = r##"
+{"type":"tool_call","session_id":"chat-2","name":"CreatePlan","input":{"plan":"# Title\n\n## Summary\nx\n\n## Assumptions\n- a\n\n## Risks\n- r\n\n## Phase: P01 - A\n\nbody"}}
+{"type":"result","subtype":"success","session_id":"chat-2"}
+"##;
+        let parsed = parse_stream_json(stdout, "", &[]);
+        assert!(parsed.plan_markdown.contains("## Phase: P01"));
     }
 }

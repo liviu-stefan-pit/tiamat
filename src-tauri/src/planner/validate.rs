@@ -1,10 +1,14 @@
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::Path;
 
 use tiamat_contracts::{compile_schema, schema_path, validate_json_str, PhasePlan, ProjectPlan};
 use uuid::Uuid;
 
 use crate::planner::types::PlanValidationIssue;
-use crate::workspace::RunWorkspaceManifest;
+use crate::workspace::{
+    greenfield_slug_from_root, is_allocatable_greenfield_project_id, is_writable_project_kind,
+    RunWorkspaceManifest,
+};
 
 pub fn validate_plan_json(
     json_text: &str,
@@ -76,7 +80,20 @@ pub fn validate_plan_json(
     let project_ids: HashSet<String> = workspace
         .projects
         .iter()
+        .filter(|p| is_writable_project_kind(&p.kind))
         .map(|p| p.project_id.clone())
+        .collect();
+    // Notes project ids are readable context, not write targets by themselves.
+    let notes_project_ids: HashSet<String> = workspace
+        .projects
+        .iter()
+        .filter(|p| !is_writable_project_kind(&p.kind))
+        .map(|p| p.project_id.clone())
+        .chain(workspace.notes_roots.iter().filter_map(|n| {
+            Path::new(n)
+                .file_name()
+                .map(|f| f.to_string_lossy().to_string())
+        }))
         .collect();
     let mut phase_ids = HashSet::new();
 
@@ -88,7 +105,12 @@ pub fn validate_plan_json(
                 phase_id: Some(phase.phase_id.clone()),
             });
         }
-        issues.extend(validate_phase(phase, workspace, &project_ids));
+        issues.extend(validate_phase(
+            phase,
+            workspace,
+            &project_ids,
+            &notes_project_ids,
+        ));
     }
 
     issues.extend(validate_dag(&plan));
@@ -105,6 +127,7 @@ fn validate_phase(
     phase: &PhasePlan,
     workspace: &RunWorkspaceManifest,
     project_ids: &HashSet<String>,
+    notes_project_ids: &HashSet<String>,
 ) -> Vec<PlanValidationIssue> {
     let mut issues = Vec::new();
     let pid = Some(phase.phase_id.clone());
@@ -169,21 +192,27 @@ fn validate_phase(
         });
     }
     for project_id in &phase.project_ids {
-        if !project_ids.is_empty() && !project_ids.contains(project_id) {
-            // Notes-only runs may use notes project ids present only in intake.
-            // Allow if it matches a notes root leaf name or managed project.
-            let notes_ok = workspace
+        if project_ids.contains(project_id) {
+            continue;
+        }
+        // Allow allocating a new managed project under projects/<slug>.
+        if is_allocatable_greenfield_project_id(workspace, project_id) {
+            continue;
+        }
+        // Notes snapshot ids may appear for context; writeRoots still enforce writability.
+        if notes_project_ids.contains(project_id)
+            || workspace
                 .notes_roots
                 .iter()
-                .any(|n| n.replace('\\', "/").ends_with(project_id));
-            if !notes_ok {
-                issues.push(PlanValidationIssue {
-                    code: "unknown_project_id".into(),
-                    message: format!("projectId '{project_id}' is not in the managed workspace"),
-                    phase_id: pid.clone(),
-                });
-            }
+                .any(|n| n.replace('\\', "/").ends_with(project_id))
+        {
+            continue;
         }
+        issues.push(PlanValidationIssue {
+            code: "unknown_project_id".into(),
+            message: format!("projectId '{project_id}' is not in the managed workspace"),
+            phase_id: pid.clone(),
+        });
     }
 
     if phase.write_roots.is_empty() {
@@ -308,13 +337,22 @@ fn validate_root_against_workspace(
     }
 
     if write {
-        workspace.validate_write_root(trimmed).or_else(|_| {
-            // Also accept managed_root equality / project-relative leaf names.
+        workspace.validate_write_root(trimmed).or_else(|primary| {
+            // Accept not-yet-allocated greenfield roots under managed_run_root/projects/<slug>.
+            if greenfield_slug_from_root(workspace, trimmed).is_some() {
+                return Ok(());
+            }
+            // Also accept managed_root equality / project-relative leaf names for writable projects.
             if workspace.projects.iter().any(|p| {
-                p.project_id == trimmed || p.write_root == trimmed || p.managed_root == trimmed
+                is_writable_project_kind(&p.kind)
+                    && (p.project_id == trimmed
+                        || p.write_root == trimmed
+                        || p.managed_root == trimmed)
             }) {
                 Ok(())
-            } else if workspace.notes_roots.iter().any(|n| n == trimmed) {
+            } else if primary.contains("notes roots are read-only")
+                || workspace.notes_roots.iter().any(|n| n == trimmed)
+            {
                 Err("notes roots are read-only; cannot be writeRoots".into())
             } else {
                 Err(format!("write root not approved: {trimmed}"))
@@ -443,7 +481,7 @@ mod tests {
                 project_id: "notes-app".into(),
                 source_root: r"C:\src\notes".into(),
                 managed_root: write_root.into(),
-                kind: ManagedProjectKind::NotesSnapshot,
+                kind: ManagedProjectKind::NonGitCopy,
                 baseline_commit: Some("abc".into()),
                 baseline_branch: "main".into(),
                 worktree_path: None,
@@ -452,7 +490,7 @@ mod tests {
                 dirty_overlay: None,
                 source_fingerprint: SourceFingerprint {
                     path: r"C:\src\notes".into(),
-                    kind: "notes".into(),
+                    kind: "folder".into(),
                     head: None,
                     branch: None,
                     status_porcelain: String::new(),
@@ -571,5 +609,98 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.iter().any(|i| i.code == "invalid_write_root"));
+    }
+
+    #[test]
+    fn accepts_flat_product_root_write_root() {
+        let product = r"C:\out\kanon";
+        let mut ws = workspace_single(product);
+        ws.managed_run_root = product.into();
+        ws.control_root = product.into();
+        ws.projects[0].project_id = "app".into();
+        ws.projects[0].write_root = product.into();
+        ws.projects[0].managed_root = product.into();
+        ws.notes_roots = vec![r"C:\notes\spec.md".into()];
+        let json = valid_plan_json(product).replace(
+            r#""projectIds": ["notes-app"]"#,
+            r#""projectIds": ["app"]"#,
+        );
+        let plan = validate_plan_json(
+            &json,
+            Uuid::parse_str("d4e5f6a7-b8c9-4012-d345-6789abcdef01").unwrap(),
+            &ws,
+        )
+        .expect("flat product root must validate");
+        assert_eq!(plan.phases[0].project_ids, vec!["app".to_string()]);
+        assert_eq!(plan.phases[0].write_roots, vec![product.to_string()]);
+    }
+
+    #[test]
+    fn accepts_greenfield_project_under_managed_projects() {
+        // Mirrors the exported log: notes-only workspace, architect invents
+        // projectId skill-rule-evaluation-engine under managed_run_root/projects/.
+        let mut ws = workspace_single(r"C:\managed\run\projects\app");
+        ws.projects.clear();
+        ws.notes_roots = vec![r"C:\managed\run\notes\master-plan".into()];
+        let green = r"C:\managed\run\projects\skill-rule-evaluation-engine";
+        let json = valid_plan_json(green).replace(
+            r#""projectIds": ["notes-app"]"#,
+            r#""projectIds": ["skill-rule-evaluation-engine"]"#,
+        );
+        let plan = validate_plan_json(
+            &json,
+            Uuid::parse_str("d4e5f6a7-b8c9-4012-d345-6789abcdef01").unwrap(),
+            &ws,
+        )
+        .expect("greenfield write root under projects/ must validate");
+        assert_eq!(
+            plan.phases[0].project_ids,
+            vec!["skill-rule-evaluation-engine".to_string()]
+        );
+    }
+
+    #[test]
+    fn rejects_notes_root_as_write_root() {
+        let notes = r"C:\managed\run\notes\master-plan";
+        let mut ws = workspace_single(r"C:\managed\run\projects\app");
+        ws.notes_roots = vec![notes.into()];
+        ws.projects.push(ManagedProject {
+            project_id: "master-plan".into(),
+            source_root: r"C:\src\notes.md".into(),
+            managed_root: notes.into(),
+            kind: ManagedProjectKind::NotesSnapshot,
+            baseline_commit: Some("abc".into()),
+            baseline_branch: "main".into(),
+            worktree_path: None,
+            write_root: notes.into(),
+            read_roots: vec![r"C:\managed\run".into()],
+            dirty_overlay: None,
+            source_fingerprint: SourceFingerprint {
+                path: r"C:\src\notes.md".into(),
+                kind: "notes".into(),
+                head: None,
+                branch: None,
+                status_porcelain: String::new(),
+                status_hash: "0".into(),
+                tree_hash: "0".into(),
+                captured_at_utc: chrono::Utc::now(),
+            },
+            lock_name: "write:master-plan".into(),
+        });
+        let json = valid_plan_json(notes).replace(
+            r#""projectIds": ["notes-app"]"#,
+            r#""projectIds": ["master-plan"]"#,
+        );
+        let err = validate_plan_json(
+            &json,
+            Uuid::parse_str("d4e5f6a7-b8c9-4012-d345-6789abcdef01").unwrap(),
+            &ws,
+        )
+        .unwrap_err();
+        assert!(
+            err.iter().any(|i| i.code == "invalid_write_root"
+                && i.message.contains("notes roots are read-only")),
+            "expected notes read-only rejection, got {err:?}"
+        );
     }
 }

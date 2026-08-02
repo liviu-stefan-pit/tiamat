@@ -7,6 +7,7 @@ mod dirty;
 mod error;
 mod fingerprint;
 mod git;
+mod greenfield;
 mod manager;
 mod promote;
 mod quarantine;
@@ -15,6 +16,12 @@ pub mod roots;
 mod types;
 
 pub use error::{WorkspaceError, WorkspaceResult};
+pub use greenfield::{
+    bootstrap_plan_greenfield_projects, collect_missing_greenfield_ids,
+    ensure_default_greenfield_if_needed, ensure_greenfield_project, greenfield_project_path,
+    greenfield_slug_from_root, has_writable_project, is_allocatable_greenfield_project_id,
+    is_flat_layout, is_safe_project_slug, is_writable_project_kind, DEFAULT_GREENFIELD_PROJECT_ID,
+};
 pub use manager::{
     checkpoint_project, export_managed_project, export_managed_project_to, find_managed_run_root,
     load_manifest, materialize_run_workspace, promote_managed_run, quarantine_project_path,

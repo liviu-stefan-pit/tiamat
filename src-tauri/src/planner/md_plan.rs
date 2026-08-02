@@ -102,10 +102,7 @@ fn ensure_phase_markers(body: &str) -> Result<(), String> {
     if looks_like_structured_master_plan(body) {
         Ok(())
     } else {
-        Err(
-            "extracted markdown missing required phase markers (`## Phase: <id> — <title>`)"
-                .into(),
-        )
+        Err("extracted markdown missing required phase markers (`## Phase: <id> — <title>`)".into())
     }
 }
 
@@ -134,9 +131,7 @@ pub fn compile_master_plan_markdown(
 
     let phase_blocks = split_phase_blocks(md);
     if phase_blocks.is_empty() {
-        issues.push(
-            "no `## Phase:` sections found; structured phase outline is required".into(),
-        );
+        issues.push("no `## Phase:` sections found; structured phase outline is required".into());
     }
 
     let mut phases = Vec::new();
@@ -189,7 +184,10 @@ fn section_body(md: &str, heading: &str) -> Option<String> {
     let needle_l = needle.to_ascii_lowercase();
     let start = lower.find(&needle_l)?;
     let after_heading = &md[start..];
-    let after_nl = after_heading.find('\n').map(|i| i + 1).unwrap_or(after_heading.len());
+    let after_nl = after_heading
+        .find('\n')
+        .map(|i| i + 1)
+        .unwrap_or(after_heading.len());
     let body_start = start + after_nl;
     let rest = &md[body_start..];
     let end = rest
@@ -241,12 +239,10 @@ fn compile_phase(block: &str) -> Result<PhasePlan, Vec<String>> {
     let header = block.lines().next().unwrap_or("").trim();
     let (hdr_id, hdr_title) = parse_phase_header(header);
 
-    let phase_id = field(block, "phaseId")
-        .or(hdr_id)
-        .unwrap_or_else(|| {
-            issues.push("phase missing phaseId".into());
-            String::new()
-        });
+    let phase_id = field(block, "phaseId").or(hdr_id).unwrap_or_else(|| {
+        issues.push("phase missing phaseId".into());
+        String::new()
+    });
     let title = field(block, "title").or(hdr_title).unwrap_or_else(|| {
         // Prefer header title; else empty.
         String::new()
@@ -264,15 +260,11 @@ fn compile_phase(block: &str) -> Result<PhasePlan, Vec<String>> {
     let project_ids = list_field(block, "projectIds");
     let read_roots = path_list_field(block, "readRoots");
     let write_roots = path_list_field(block, "writeRoots");
-    let model_tier = parse_model_tier(
-        field(block, "modelTier")
-            .as_deref()
-            .unwrap_or("composer"),
-    )
-    .unwrap_or_else(|e| {
-        issues.push(format!("phase {phase_id}: {e}"));
-        ModelTier::Composer
-    });
+    let model_tier = parse_model_tier(field(block, "modelTier").as_deref().unwrap_or("composer"))
+        .unwrap_or_else(|e| {
+            issues.push(format!("phase {phase_id}: {e}"));
+            ModelTier::Composer
+        });
     let estimated_minutes = field(block, "estimatedMinutes")
         .and_then(|s| s.parse::<u32>().ok())
         .unwrap_or(30);
@@ -290,13 +282,14 @@ fn compile_phase(block: &str) -> Result<PhasePlan, Vec<String>> {
     let expected_artifacts = list_field(block, "expectedArtifacts");
 
     let acceptance_criteria = parse_acceptance_criteria(block, &phase_id, &mut issues);
-    let unit_tests = parse_tests(block, "Unit tests", &phase_id, &mut issues);
-    let integration_tests = parse_tests(block, "Integration tests", &phase_id, &mut issues);
-    let e2e_tests = {
-        let mut tmp = Vec::new();
+    let (unit_tests, unit_none) = parse_tests(block, "Unit tests", &phase_id, &mut issues);
+    let (integration_tests, integration_none) =
+        parse_tests(block, "Integration tests", &phase_id, &mut issues);
+    let (e2e_tests, e2e_none) = {
+        let mut tmp = (Vec::new(), None);
         for heading in ["E2E tests", "E2e tests", "End-to-end tests"] {
             tmp = parse_tests(block, heading, &phase_id, &mut issues);
-            if !tmp.is_empty() || subsection(block, heading).is_some() {
+            if !tmp.0.is_empty() || tmp.1.is_some() || subsection(block, heading).is_some() {
                 break;
             }
         }
@@ -308,10 +301,20 @@ fn compile_phase(block: &str) -> Result<PhasePlan, Vec<String>> {
         return Err(issues);
     }
 
+    let mut objective = objective;
+    fold_none_reason_into_objective(&mut objective, "unit", &unit_tests, unit_none.as_deref());
+    fold_none_reason_into_objective(
+        &mut objective,
+        "integration",
+        &integration_tests,
+        integration_none.as_deref(),
+    );
+    fold_none_reason_into_objective(&mut objective, "e2e", &e2e_tests, e2e_none.as_deref());
+
     let mut phase = PhasePlan {
         phase_id: phase_id.clone(),
         title,
-        objective: objective.clone(),
+        objective,
         dependencies,
         project_ids,
         read_roots,
@@ -336,6 +339,44 @@ fn compile_phase(block: &str) -> Result<PhasePlan, Vec<String>> {
     Ok(phase)
 }
 
+/// When a test subsection is only `(none) — reason: …`, fold that reason into the
+/// objective so semantic validation (`empty_layer_unexplained`) accepts empty arrays.
+fn fold_none_reason_into_objective(
+    objective: &mut String,
+    layer: &str,
+    tests: &[TestSpec],
+    none_reason: Option<&str>,
+) {
+    if !tests.is_empty() {
+        return;
+    }
+    let Some(reason) = none_reason.map(str::trim).filter(|s| !s.is_empty()) else {
+        return;
+    };
+    let blob = objective.to_ascii_lowercase();
+    // Only skip when this layer is already explained; do not treat another layer's
+    // "inapplicable" as covering this one (we still want each reason in the objective).
+    let already = blob.contains(&format!("{layer} inapplicable"))
+        || blob.contains(&format!("{layer} tests inapplicable"))
+        || (layer == "e2e" && blob.contains("end-to-end tests inapplicable"));
+    if already {
+        return;
+    }
+    let label = match layer {
+        "unit" => "Unit tests",
+        "integration" => "Integration tests",
+        "e2e" => "E2E tests",
+        other => other,
+    };
+    if !objective.is_empty() && !objective.ends_with(['.', '!', '?']) {
+        objective.push('.');
+    }
+    if !objective.is_empty() {
+        objective.push(' ');
+    }
+    objective.push_str(&format!("{label} inapplicable: {reason}."));
+}
+
 fn parse_phase_header(header: &str) -> (Option<String>, Option<String>) {
     // ## Phase: P01 — Title   or  ## Phase P01 — Title
     let trimmed = header.trim().trim_start_matches('#').trim();
@@ -351,15 +392,9 @@ fn parse_phase_header(header: &str) -> (Option<String>, Option<String>) {
     };
     let rest = rest.trim();
     if let Some((id, title)) = rest.split_once("—") {
-        (
-            Some(id.trim().to_string()),
-            Some(title.trim().to_string()),
-        )
+        (Some(id.trim().to_string()), Some(title.trim().to_string()))
     } else if let Some((id, title)) = rest.split_once(" - ") {
-        (
-            Some(id.trim().to_string()),
-            Some(title.trim().to_string()),
-        )
+        (Some(id.trim().to_string()), Some(title.trim().to_string()))
     } else if !rest.is_empty() {
         (Some(rest.to_string()), None)
     } else {
@@ -371,7 +406,10 @@ fn field(block: &str, key: &str) -> Option<String> {
     let key_l = key.to_ascii_lowercase();
     for line in block.lines() {
         let t = line.trim();
-        let t = t.strip_prefix("- ").or_else(|| t.strip_prefix("* ")).unwrap_or(t);
+        let t = t
+            .strip_prefix("- ")
+            .or_else(|| t.strip_prefix("* "))
+            .unwrap_or(t);
         // **phaseId**: value  |  **phaseId:** value  | phaseId: value
         let cleaned = t.replace("**", "");
         let cleaned = cleaned.trim();
@@ -488,20 +526,24 @@ fn parse_tests(
     heading: &str,
     phase_id: &str,
     issues: &mut Vec<String>,
-) -> Vec<TestSpec> {
+) -> (Vec<TestSpec>, Option<String>) {
     let body = subsection(block, heading).unwrap_or_default();
     let mut out = Vec::new();
+    let mut none_reason: Option<String> = None;
     for line in body.lines() {
         let t = line.trim();
         if !(t.starts_with("- ") || t.starts_with("* ")) {
             continue;
         }
         let t = t[2..].trim();
-        // (none) — reason: ...
+        // (none) — reason: ...  (preserve reason; do not emit a TestSpec row)
         if t.to_ascii_lowercase().starts_with("(none)")
             || t.to_ascii_lowercase().starts_with("none ")
             || t.eq_ignore_ascii_case("none")
         {
+            if none_reason.is_none() {
+                none_reason = extract_none_reason(t);
+            }
             continue;
         }
         let (id, rest) = split_backtick_id(t);
@@ -529,7 +571,11 @@ fn parse_tests(
             }
         });
 
-        if command.is_empty() && inapplicable.as_ref().map(|s| s.trim().is_empty()).unwrap_or(true)
+        if command.is_empty()
+            && inapplicable
+                .as_ref()
+                .map(|s| s.trim().is_empty())
+                .unwrap_or(true)
         {
             issues.push(format!(
                 "phase {phase_id}: test {test_id} needs command: `…` or reason:"
@@ -550,7 +596,36 @@ fn parse_tests(
             inapplicable_reason: inapplicable.filter(|s| !s.trim().is_empty()),
         });
     }
-    out
+    (out, none_reason)
+}
+
+fn extract_none_reason(line: &str) -> Option<String> {
+    // `(none) — reason: …` or `none — reason: …` or bare `(none)`.
+    if let Some(reason) = extract_labeled(line, "reason") {
+        let reason = reason.trim();
+        if !reason.is_empty() {
+            return Some(reason.to_string());
+        }
+    }
+    // Fallback: text after the first em/en dash.
+    for sep in ["—", " - "] {
+        if let Some((_, rest)) = line.split_once(sep) {
+            let rest = rest.trim();
+            if let Some((_, v)) = rest.split_once(':') {
+                let v = v.trim();
+                if !v.is_empty() {
+                    return Some(v.to_string());
+                }
+            }
+            if !rest.is_empty()
+                && !rest.eq_ignore_ascii_case("reason")
+                && !rest.to_ascii_lowercase().starts_with("reason")
+            {
+                return Some(rest.to_string());
+            }
+        }
+    }
+    None
 }
 
 fn parse_manual_checks(block: &str) -> Vec<ManualCheck> {
@@ -568,12 +643,7 @@ fn parse_manual_checks(block: &str) -> Vec<ManualCheck> {
             continue;
         }
         let blocking = t.to_ascii_lowercase().contains("blocking: true");
-        let description = t
-            .split("—")
-            .next()
-            .unwrap_or(t)
-            .trim()
-            .to_string();
+        let description = t.split("—").next().unwrap_or(t).trim().to_string();
         out.push(ManualCheck {
             description,
             blocking,
@@ -716,19 +786,173 @@ fn parse_evidence_kinds(raw: &str) -> Vec<TestKind> {
         .collect()
 }
 
-/// Template used so the architect does not spend tokens on copy-paste prompts.
+/// Structured brief so phase agents get ACs/tests/roots without another model call.
 pub fn synthesize_phase_prompt(phase: &PhasePlan) -> String {
-    format!(
-        "Read .tiamat/MASTER-PLAN.md and .tiamat/plan.json. Inspect git status and prior \
-         evidence. Implement only {id} ({title}). Objective: {objective}. Preserve unrelated \
-         work. Add/run appropriate unit, integration, and E2E tests as specified for this \
-         phase. Return a schema-valid immutable phase-result payload. The orchestrator alone \
-         updates SQLite and both plan artifacts transactionally. Do not declare success \
-         without command output and artifacts.",
-        id = phase.phase_id,
-        title = phase.title,
-        objective = phase.objective.trim(),
-    )
+    let mut parts = Vec::new();
+    parts.push(format!(
+        "You are Tiamat's phase implementation agent for {} ({}).",
+        phase.phase_id, phase.title
+    ));
+    parts.push(
+        "Read .tiamat/MASTER-PLAN.md (deep design) and .tiamat/plan.json before changing files. \
+         Inspect git status and prior evidence. Implement only this phase. Do not implement \
+         other phases or final gates. Preserve unrelated work. The orchestrator alone updates \
+         SQLite and both plan artifacts transactionally."
+            .into(),
+    );
+    parts.push(format!("Objective: {}", phase.objective.trim()));
+    if !phase.project_ids.is_empty() {
+        parts.push(format!("Project IDs: {}.", phase.project_ids.join(", ")));
+    }
+    parts.push(format!(
+        "Write exclusively inside: {}.",
+        if phase.write_roots.is_empty() {
+            "(none listed — check plan.json)".into()
+        } else {
+            phase.write_roots.join(", ")
+        }
+    ));
+    if !phase.read_roots.is_empty() {
+        parts.push(format!("Read roots: {}.", phase.read_roots.join(", ")));
+    }
+    parts.push(format!(
+        "Rollback checkpoint: {}.",
+        phase.rollback.checkpoint
+    ));
+
+    parts.push("Acceptance criteria:".into());
+    if phase.acceptance_criteria.is_empty() {
+        parts.push("- (none listed)".into());
+    } else {
+        for ac in &phase.acceptance_criteria {
+            let kinds = ac
+                .required_evidence_kinds
+                .iter()
+                .map(test_kind_label)
+                .collect::<Vec<_>>()
+                .join(", ");
+            parts.push(format!(
+                "- `{}` — {} — evidence: {}",
+                ac.criterion_id, ac.description, kinds
+            ));
+        }
+    }
+
+    parts.push(render_test_layer_brief(
+        "Unit tests",
+        &phase.unit_tests,
+        &phase.objective,
+    ));
+    parts.push(render_test_layer_brief(
+        "Integration tests",
+        &phase.integration_tests,
+        &phase.objective,
+    ));
+    parts.push(render_test_layer_brief(
+        "E2E tests",
+        &phase.e2e_tests,
+        &phase.objective,
+    ));
+
+    if phase.expected_artifacts.is_empty() {
+        parts.push("Expected artifacts: (none listed).".into());
+    } else {
+        parts.push(format!(
+            "Expected artifacts: {}.",
+            phase.expected_artifacts.join(", ")
+        ));
+    }
+
+    parts.push(
+        "Run the listed tests (or honor inapplicable layers). Do not declare success without \
+         command output and artifacts."
+            .into(),
+    );
+    parts.push(format!(
+        "Return one schema-valid immutable phase-result JSON (immutable=true), for example:\n\
+         {{\n\
+           \"schemaVersion\": 1,\n\
+           \"phaseId\": \"{}\",\n\
+           \"status\": \"passed\",\n\
+           \"summary\": \"<what changed>\",\n\
+           \"changedFiles\": [\"<path>\"],\n\
+           \"evidenceIds\": [],\n\
+           \"acceptanceSatisfied\": [{}],\n\
+           \"artifacts\": [],\n\
+           \"immutable\": true\n\
+         }}",
+        phase.phase_id,
+        phase
+            .acceptance_criteria
+            .iter()
+            .map(|ac| format!("\"{}\"", ac.criterion_id))
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
+    parts.join("\n")
+}
+
+fn test_kind_label(kind: &TestKind) -> &'static str {
+    match kind {
+        TestKind::Unit => "unit",
+        TestKind::Integration => "integration",
+        TestKind::E2e => "e2e",
+        TestKind::Manual => "manual",
+        TestKind::Diff => "diff",
+        TestKind::Review => "review",
+        TestKind::Artifact => "artifact",
+        TestKind::Cleanup => "cleanup",
+    }
+}
+
+fn render_test_layer_brief(label: &str, tests: &[TestSpec], objective: &str) -> String {
+    let mut lines = vec![format!("{label}:")];
+    if tests.is_empty() {
+        let layer = if label.to_ascii_lowercase().starts_with("unit") {
+            "unit"
+        } else if label.to_ascii_lowercase().starts_with("integration") {
+            "integration"
+        } else {
+            "e2e"
+        };
+        let blob = objective.to_ascii_lowercase();
+        let note = if blob.contains(&format!("{layer} inapplicable"))
+            || blob.contains(&format!("{layer} tests inapplicable"))
+            || blob.contains("tests inapplicable")
+            || blob.contains("inapplicable")
+        {
+            format!("- (none) — inapplicable (see objective)")
+        } else {
+            "- (none) — no tests listed; do not invent unrelated suites".into()
+        };
+        lines.push(note);
+        return lines.join("\n");
+    }
+    for t in tests {
+        if let Some(reason) = &t.inapplicable_reason {
+            lines.push(format!("- `{}` — inapplicable: {}", t.test_id, reason));
+            continue;
+        }
+        let cmd = if t.command.is_empty() {
+            "(no command)".into()
+        } else {
+            t.command
+                .iter()
+                .map(|c| format!("`{c}`"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let covers = if t.covers.is_empty() {
+            String::new()
+        } else {
+            format!(" — covers: {}", t.covers.join(", "))
+        };
+        lines.push(format!(
+            "- `{}` — command: {} — cwd: `{}` — timeout: {}{covers}",
+            t.test_id, cmd, t.working_directory, t.timeout_seconds
+        ));
+    }
+    lines.join("\n")
 }
 
 #[cfg(test)]
@@ -787,9 +1011,7 @@ Deep design notes go here and are preserved in MASTER-PLAN.md.
 
     #[test]
     fn extracts_fenced_markdown_and_ignores_noise() {
-        let assistant = format!(
-            "Thinking...\n\n```markdown\n{SAMPLE_MD}\n```\n\nDone."
-        );
+        let assistant = format!("Thinking...\n\n```markdown\n{SAMPLE_MD}\n```\n\nDone.");
         let md = extract_master_plan_markdown(&assistant).unwrap();
         assert!(md.contains("## Phase: P01"));
         assert!(md.starts_with("# Rough-spec"));
@@ -798,9 +1020,7 @@ Deep design notes go here and are preserved in MASTER-PLAN.md.
     #[test]
     fn stream_fixture_with_session_noise_still_extracts_md() {
         // Simulates assembled assistant_text after stream parse (control frames already ignored).
-        let assistant = format!(
-            "I will inspect notes.\n\n```md\n{SAMPLE_MD}\n```"
-        );
+        let assistant = format!("I will inspect notes.\n\n```md\n{SAMPLE_MD}\n```");
         let md = extract_master_plan_markdown(&assistant).unwrap();
         let plan = compile_master_plan_markdown(&md, Uuid::nil()).unwrap();
         assert_eq!(plan.phases.len(), 1);
@@ -833,7 +1053,154 @@ Deep design notes go here and are preserved in MASTER-PLAN.md.
         let run_id = Uuid::parse_str("d4e5f6a7-b8c9-4012-d345-6789abcdef01").unwrap();
         let plan = compile_master_plan_markdown(&md, run_id).unwrap();
         assert_eq!(plan.phases[0].phase_id, "P01");
-        assert!(plan.phases[0].prompt.contains("Implement only P01"));
+        assert!(plan.phases[0].prompt.contains("P01"));
+        assert!(plan.phases[0].prompt.contains("Implement only this phase"));
+        assert!(plan.phases[0].prompt.contains("AC-P01-01"));
+        assert!(plan.phases[0].prompt.contains("immutable"));
+    }
+
+    #[test]
+    fn none_reason_without_objective_inapplicable_folds_and_validates() {
+        // Contract-faithful MD: reasons only under (none), not in objective.
+        let md = r#"# Contract faithful plan
+
+## Summary
+MVP shell.
+
+## Assumptions
+- Single project
+
+## Risks
+- Scope creep
+
+## Phase: P01 — Shell
+
+- **phaseId**: P01
+- **objective**: Render a notes list from fixture data
+- **dependencies**: none
+- **projectIds**: notes-app
+- **readRoots**: /managed/notes-app
+- **writeRoots**: /managed/notes-app
+- **modelTier**: composer
+- **estimatedMinutes**: 10
+- **rollbackCheckpoint**: intake-baseline
+- **rollbackStrategy**: restore
+- **expectedArtifacts**: src/notes.ts
+
+### Acceptance criteria
+- `AC-P01-01` — Notes list unit test passes — evidence: unit
+
+### Unit tests
+- `UT-P01-01` — command: `npm` `test` — cwd: `.` — timeout: 120 — covers: AC-P01-01
+
+### Integration tests
+- (none) — reason: notes-only MVP
+
+### E2E tests
+- (none) — reason: no UI host yet
+
+### Manual checks
+- (none)
+
+## Final gates
+- `FG-01` — Independent architecture review — deps: P01 — evidence: review
+"#;
+        let run_id = Uuid::parse_str("d4e5f6a7-b8c9-4012-d345-6789abcdef01").unwrap();
+        let plan = compile_master_plan_markdown(md, run_id).unwrap();
+        let phase = &plan.phases[0];
+        assert!(
+            phase
+                .objective
+                .to_ascii_lowercase()
+                .contains("integration tests inapplicable"),
+            "objective should fold integration reason: {}",
+            phase.objective
+        );
+        assert!(
+            phase
+                .objective
+                .to_ascii_lowercase()
+                .contains("e2e tests inapplicable"),
+            "objective should fold e2e reason: {}",
+            phase.objective
+        );
+        assert!(phase.integration_tests.is_empty());
+        assert!(phase.e2e_tests.is_empty());
+        assert!(phase.prompt.contains("AC-P01-01"));
+        assert!(phase.prompt.contains("`npm` `test`") || phase.prompt.contains("npm"));
+        assert!(phase.prompt.contains("/managed/notes-app"));
+        assert!(phase.prompt.contains("\"immutable\": true") || phase.prompt.contains("immutable"));
+
+        // Semantic empty-layer check uses folded objective.
+        let json = serde_json::to_string_pretty(&plan).unwrap();
+        let schema = compile_schema(&schema_path("project-plan.schema.json")).unwrap();
+        validate_json_str(&schema, &json).expect("compiled plan must schema-validate");
+
+        use crate::workspace::{
+            ManagedProject, ManagedProjectKind, PromotionMetadata, PromotionStatus,
+            RetentionPolicy, RunWorkspaceManifest, SourceFingerprint,
+        };
+        let root = "/managed/notes-app";
+        let ws = RunWorkspaceManifest {
+            schema_version: 1,
+            run_id,
+            intake_id: Uuid::nil(),
+            managed_run_root: "/managed".into(),
+            control_root: "/control".into(),
+            projects: vec![ManagedProject {
+                project_id: "notes-app".into(),
+                source_root: "/source/notes-app".into(),
+                managed_root: root.into(),
+                kind: ManagedProjectKind::NonGitCopy,
+                baseline_commit: Some("abc".into()),
+                baseline_branch: "main".into(),
+                worktree_path: None,
+                write_root: root.into(),
+                read_roots: vec!["/managed".into()],
+                dirty_overlay: None,
+                source_fingerprint: SourceFingerprint {
+                    path: "/source/notes-app".into(),
+                    kind: "folder".into(),
+                    head: None,
+                    branch: None,
+                    status_porcelain: String::new(),
+                    status_hash: "0".into(),
+                    tree_hash: "0".into(),
+                    captured_at_utc: chrono::Utc::now(),
+                },
+                lock_name: "write:notes-app".into(),
+            }],
+            notes_roots: vec![],
+            checkpoints: vec![],
+            quarantines: vec![],
+            promotion: PromotionMetadata {
+                status: PromotionStatus::Unpromoted,
+                export_path: None,
+                promoted_at_utc: None,
+                notes: None,
+            },
+            retention: RetentionPolicy::default(),
+            fingerprint_pairs: vec![],
+            created_at_utc: chrono::Utc::now(),
+            source_unchanged: true,
+        };
+        crate::planner::validate::validate_plan_json(&json, run_id, &ws)
+            .expect("folded (none) reasons must pass semantic validation");
+    }
+
+    #[test]
+    fn synthesize_phase_prompt_is_exemplary_brief() {
+        let run_id = Uuid::nil();
+        let plan = compile_master_plan_markdown(SAMPLE_MD, run_id).unwrap();
+        let prompt = synthesize_phase_prompt(&plan.phases[0]);
+        assert!(prompt.contains("P01"));
+        assert!(prompt.contains("AC-P01-01"));
+        assert!(prompt.contains("UT-P01-01") || prompt.contains("npm"));
+        assert!(prompt.contains("/managed/notes-app"));
+        assert!(prompt.contains("schemaVersion"));
+        assert!(prompt.contains("immutable"));
+        assert!(prompt.contains("Integration tests"));
+        assert!(prompt.contains("inapplicable") || prompt.contains("(none)"));
     }
 
     #[test]

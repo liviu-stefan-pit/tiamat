@@ -21,7 +21,7 @@ pub struct GateRunOptions<'a> {
     pub flaky_retry: bool,
     pub extra_env: HashMap<String, String>,
     /// When set, verification commands run through ProcessHost (Job + registry).
-    pub host: Option<(&'a Store, &'a ProcessHost, Uuid)>,
+    pub host: Option<(&'a std::sync::Mutex<Store>, &'a ProcessHost, Uuid)>,
     pub phase_id: Option<&'a str>,
     pub attempt_id: Option<Uuid>,
 }
@@ -352,7 +352,9 @@ fn run_command_capture(
 
     let cap = match opts.host {
         Some((store, host, _)) => {
-            let _ = store.create_run(run_id, "verification", "executing");
+            let _ = store.lock().ok().and_then(|s| {
+                s.create_run(run_id, "verification", "executing").ok()
+            });
             run_capture_hosted(store, host, request)
                 .map_err(|e| VerificationError::Spawn(e.to_string()))?
         }
@@ -360,9 +362,12 @@ fn run_command_capture(
             // Ephemeral hosted path — still Job-associated (not bare Command::spawn).
             let dir = std::env::temp_dir().join(format!("tiamat-verify-{}", Uuid::new_v4()));
             std::fs::create_dir_all(&dir).map_err(|e| VerificationError::Spawn(e.to_string()))?;
-            let store =
-                Store::open_in_memory(&dir).map_err(|e| VerificationError::Spawn(e.to_string()))?;
-            let _ = store.create_run(run_id, "verification-ephemeral", "executing");
+            let store = std::sync::Mutex::new(
+                Store::open_in_memory(&dir).map_err(|e| VerificationError::Spawn(e.to_string()))?,
+            );
+            let _ = store.lock().ok().and_then(|s| {
+                s.create_run(run_id, "verification-ephemeral", "executing").ok()
+            });
             let host = ProcessHost::new();
             run_capture_hosted(&store, &host, request)
                 .map_err(|e| VerificationError::Spawn(e.to_string()))?

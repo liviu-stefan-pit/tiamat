@@ -16,7 +16,9 @@ use crate::executor::diff::{
     collect_changed_files, find_new_escapes, snapshot_paths, validate_diff_boundaries,
 };
 use crate::executor::error::{ExecutorError, ExecutorResult};
-use crate::executor::prompt::{assemble_phase_prompt, assemble_recovery_prompt};
+use crate::executor::prompt::{
+    assemble_phase_prompt, assemble_recovery_prompt, format_phase_plan_context,
+};
 use crate::executor::recover::{decide_partial_recovery, PartialRecoveryDecision};
 use crate::executor::result::extract_phase_result;
 use crate::executor::types::{ExecutionMode, PhaseExecutionOutcome, RecoveryReport};
@@ -87,10 +89,7 @@ pub fn execute_phase(req: ExecutePhaseRequest<'_>) -> ExecutorResult<PhaseExecut
 
     let prompt = match req.mode {
         ExecutionMode::Fresh => {
-            let ctx = format!(
-                "runId={}\nphaseId={}\nwriteRoots={:?}\nreadRoots={:?}",
-                req.run_id, phase.phase_id, phase.write_roots, phase.read_roots
-            );
+            let ctx = format_phase_plan_context(&req.run_id.to_string(), &phase);
             assemble_phase_prompt(&phase, &ctx)
         }
         ExecutionMode::Resume => assemble_recovery_prompt(
@@ -722,14 +721,18 @@ fn run_phase_agent_hosted(
         Some(ctx) => {
             // The scheduler inserts the attempt row before we execute, so the FK is valid.
             // If create_run races with an existing row, ignore the duplicate.
-            let _ = ctx.store.create_run(run_id, "phase-exec", "executing");
+            let _ = ctx.store.lock().ok().and_then(|s| {
+                s.create_run(run_id, "phase-exec", "executing").ok()
+            });
             run_capture_hosted(ctx.store, ctx.host, request).map_err(|e| e.to_string())
         }
         None => {
             let dir = std::env::temp_dir().join(format!("tiamat-ephemeral-{}", Uuid::new_v4()));
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-            let store = Store::open_in_memory(&dir).map_err(|e| e.to_string())?;
-            let _ = store.create_run(run_id, "phase-exec-ephemeral", "executing");
+            let store = std::sync::Mutex::new(Store::open_in_memory(&dir).map_err(|e| e.to_string())?);
+            let _ = store.lock().ok().and_then(|s| {
+                s.create_run(run_id, "phase-exec-ephemeral", "executing").ok()
+            });
             let ph = ProcessHost::new();
             run_capture_hosted(&store, &ph, request).map_err(|e| e.to_string())
         }

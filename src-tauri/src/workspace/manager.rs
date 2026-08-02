@@ -12,13 +12,16 @@ use crate::workspace::error::{WorkspaceError, WorkspaceResult};
 use crate::workspace::fingerprint::{
     capture_fingerprint, ensure_source_unchanged, write_fingerprint_file,
 };
-use crate::workspace::git::{configure_identity, git};
+use crate::workspace::git::{configure_identity, git, git_text};
+use crate::workspace::greenfield::{
+    ensure_default_greenfield_if_needed, is_flat_layout, DEFAULT_GREENFIELD_PROJECT_ID,
+};
 use crate::workspace::promote::export_project;
 use crate::workspace::quarantine::quarantine_path;
 use crate::workspace::roots::lock_name_for;
 use crate::workspace::types::{
-    FingerprintPair, ManagedProject, PromotionMetadata, PromotionStatus, RetentionPolicy,
-    RunWorkspaceManifest,
+    FingerprintPair, ManagedProject, ManagedProjectKind, PromotionMetadata, PromotionStatus,
+    RetentionPolicy, RunWorkspaceManifest, SourceFingerprint,
 };
 
 pub struct MaterializeRequest {
@@ -28,7 +31,194 @@ pub struct MaterializeRequest {
     pub create_internal_worktrees: bool,
 }
 
+fn intake_is_notes_only(intake: &IntakeManifest) -> bool {
+    !intake.projects.is_empty()
+        && intake
+            .projects
+            .iter()
+            .all(|p| matches!(p.kind, ProjectKind::Notes))
+}
+
 pub fn materialize_run_workspace(req: MaterializeRequest) -> WorkspaceResult<RunWorkspaceManifest> {
+    if intake_is_notes_only(&req.intake) {
+        return materialize_flat_notes_workspace(req);
+    }
+    materialize_isolated_workspace(req)
+}
+
+/// Notes-only: output_dir IS the product root. Plan files live in `.tiamat/`;
+/// notes stay at their original paths (read-only); no `run-{uuid}/` shell.
+fn materialize_flat_notes_workspace(
+    req: MaterializeRequest,
+) -> WorkspaceResult<RunWorkspaceManifest> {
+    let managed_run_root = req.managed_parent.clone();
+    fs::create_dir_all(&managed_run_root)?;
+
+    let existing_manifest = managed_run_root.join(".tiamat").join("manifest.json");
+    if existing_manifest.is_file() {
+        return Err(WorkspaceError::Message(format!(
+            "output already has a Tiamat workspace: {}",
+            existing_manifest.display()
+        )));
+    }
+
+    let tiamat_dir = managed_run_root.join(".tiamat");
+    fs::create_dir_all(tiamat_dir.join("fingerprints"))?;
+    fs::create_dir_all(tiamat_dir.join("quarantine"))?;
+    fs::write(
+        tiamat_dir.join("README.md"),
+        "Tiamat plan artifacts (MASTER-PLAN.md, plan.json, PLAN-SCHEDULE.md) for this product root.\n",
+    )?;
+
+    // Product git at the output root (greenfield). Reuse if already a repo.
+    if !managed_run_root.join(".git").is_dir() {
+        git(&managed_run_root, &["init"])?;
+        configure_identity(&managed_run_root)?;
+        let branch = format!("tiamat/greenfield-{DEFAULT_GREENFIELD_PROJECT_ID}");
+        git(&managed_run_root, &["checkout", "-B", &branch])?;
+        git(
+            &managed_run_root,
+            &["add", "-A", ".tiamat"],
+        )?;
+        git(
+            &managed_run_root,
+            &[
+                "commit",
+                "--allow-empty",
+                "-m",
+                &format!("tiamat greenfield baseline for {DEFAULT_GREENFIELD_PROJECT_ID}"),
+            ],
+        )?;
+    } else {
+        configure_identity(&managed_run_root)?;
+    }
+
+    let baseline_commit = git_text(&managed_run_root, &["rev-parse", "HEAD"]).ok();
+    let baseline_branch = git_text(&managed_run_root, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .unwrap_or_else(|_| format!("tiamat/greenfield-{DEFAULT_GREENFIELD_PROJECT_ID}"));
+
+    let mut projects = Vec::new();
+    let mut notes_roots = Vec::new();
+    let mut fingerprint_pairs = Vec::new();
+    let mut source_unchanged = true;
+    let write_root = managed_run_root.display().to_string();
+
+    for project in &req.intake.projects {
+        let source = PathBuf::from(&project.root);
+        if !source.exists() {
+            return Err(WorkspaceError::NotFound(source));
+        }
+
+        let before = capture_fingerprint(&source, project_kind_label(&project.kind))?;
+        write_fingerprint_file(
+            &tiamat_dir
+                .join("fingerprints")
+                .join(format!("{}-before.json", project.project_id)),
+            &before,
+        )?;
+
+        // Notes stay at original intake paths — no copy into the output folder.
+        let source_s = source.display().to_string();
+        notes_roots.push(source_s.clone());
+        projects.push(ManagedProject {
+            project_id: project.project_id.clone(),
+            source_root: project.root.clone(),
+            managed_root: source_s.clone(),
+            kind: ManagedProjectKind::NotesSnapshot,
+            baseline_commit: None,
+            baseline_branch: "notes-readonly".into(),
+            worktree_path: None,
+            write_root: source_s.clone(),
+            read_roots: vec![write_root.clone(), source_s],
+            dirty_overlay: None,
+            source_fingerprint: before.clone(),
+            lock_name: lock_name_for(&project.project_id),
+        });
+
+        let after = capture_fingerprint(&source, project_kind_label(&project.kind))?;
+        write_fingerprint_file(
+            &tiamat_dir
+                .join("fingerprints")
+                .join(format!("{}-after.json", project.project_id)),
+            &after,
+        )?;
+        ensure_source_unchanged(&before, &after)?;
+        source_unchanged &= true;
+        fingerprint_pairs.push(FingerprintPair {
+            before,
+            after,
+            unchanged: true,
+        });
+    }
+
+    // Single writable product root at output_dir (project id `app`, or `implementation`).
+    let greenfield_id = if projects
+        .iter()
+        .any(|p| p.project_id == DEFAULT_GREENFIELD_PROJECT_ID)
+    {
+        "implementation"
+    } else {
+        DEFAULT_GREENFIELD_PROJECT_ID
+    };
+
+    projects.push(ManagedProject {
+        project_id: greenfield_id.to_string(),
+        source_root: format!("greenfield:{greenfield_id}"),
+        managed_root: write_root.clone(),
+        kind: ManagedProjectKind::NonGitCopy,
+        baseline_commit,
+        baseline_branch,
+        worktree_path: None,
+        write_root: write_root.clone(),
+        read_roots: {
+            let mut roots = vec![write_root.clone()];
+            roots.extend(notes_roots.iter().cloned());
+            roots
+        },
+        dirty_overlay: None,
+        source_fingerprint: SourceFingerprint {
+            path: format!("greenfield:{greenfield_id}"),
+            kind: "greenfield".into(),
+            head: None,
+            branch: None,
+            status_porcelain: String::new(),
+            status_hash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                .into(),
+            tree_hash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                .into(),
+            captured_at_utc: Utc::now(),
+        },
+        lock_name: lock_name_for(greenfield_id),
+    });
+
+    let mut manifest = RunWorkspaceManifest {
+        schema_version: tiamat_contracts::CURRENT_SCHEMA_VERSION,
+        run_id: req.run_id,
+        intake_id: req.intake.intake_id,
+        managed_run_root: write_root.clone(),
+        control_root: write_root,
+        projects,
+        notes_roots,
+        checkpoints: Vec::new(),
+        quarantines: Vec::new(),
+        promotion: PromotionMetadata {
+            status: PromotionStatus::Unpromoted,
+            export_path: None,
+            promoted_at_utc: None,
+            notes: None,
+        },
+        retention: RetentionPolicy::default(),
+        fingerprint_pairs,
+        created_at_utc: Utc::now(),
+        source_unchanged,
+    };
+
+    let _ = create_checkpoint(&mut manifest, greenfield_id, "intake-baseline")?;
+    write_manifest(&manifest)?;
+    Ok(manifest)
+}
+
+fn materialize_isolated_workspace(req: MaterializeRequest) -> WorkspaceResult<RunWorkspaceManifest> {
     let managed_run_root = req.managed_parent.join(format!("run-{}", req.run_id));
     if managed_run_root.exists() {
         return Err(WorkspaceError::Message(format!(
@@ -163,8 +353,6 @@ pub fn materialize_run_workspace(req: MaterializeRequest) -> WorkspaceResult<Run
                     true,
                 )?;
                 notes_roots.push(dest.display().to_string());
-                // Notes are read-only snapshots; write_root still points at managed copy for metadata,
-                // but validation later can treat notes as non-writable for agents.
                 ManagedProject {
                     project_id: project.project_id.clone(),
                     source_root: project.root.clone(),
@@ -236,12 +424,31 @@ pub fn materialize_run_workspace(req: MaterializeRequest) -> WorkspaceResult<Run
         let _ = create_checkpoint(&mut manifest, &project_id, "intake-baseline")?;
     }
 
+    // Notes mixed with empty writable set still needs a greenfield under projects/.
+    let _ = ensure_default_greenfield_if_needed(&mut manifest)?;
+
     write_manifest(&manifest)?;
     Ok(manifest)
 }
 
+fn manifest_file_path(managed_run_root: &Path) -> PathBuf {
+    let flat = managed_run_root.join(".tiamat").join("manifest.json");
+    if flat.is_file() {
+        flat
+    } else {
+        managed_run_root.join("manifest.json")
+    }
+}
+
 pub fn write_manifest(manifest: &RunWorkspaceManifest) -> WorkspaceResult<()> {
-    let path = Path::new(&manifest.managed_run_root).join("manifest.json");
+    let root = Path::new(&manifest.managed_run_root);
+    let path = if is_flat_layout(manifest) {
+        let dir = root.join(".tiamat");
+        fs::create_dir_all(&dir)?;
+        dir.join("manifest.json")
+    } else {
+        root.join("manifest.json")
+    };
     let json = serde_json::to_vec_pretty(manifest)?;
     let tmp = path.with_extension("json.tmp");
     fs::write(&tmp, &json)?;
@@ -250,7 +457,7 @@ pub fn write_manifest(manifest: &RunWorkspaceManifest) -> WorkspaceResult<()> {
 }
 
 pub fn load_manifest(managed_run_root: &Path) -> WorkspaceResult<RunWorkspaceManifest> {
-    let path = managed_run_root.join("manifest.json");
+    let path = manifest_file_path(managed_run_root);
     let bytes = fs::read(&path)?;
     Ok(serde_json::from_slice(&bytes)?)
 }
@@ -283,7 +490,13 @@ pub fn export_managed_project(
     project_id: &str,
 ) -> WorkspaceResult<RunWorkspaceManifest> {
     let mut manifest = load_manifest(managed_run_root)?;
-    let export_dir = PathBuf::from(&manifest.managed_run_root).join("exports");
+    let export_dir = if is_flat_layout(&manifest) {
+        PathBuf::from(&manifest.managed_run_root)
+            .join(".tiamat")
+            .join("exports")
+    } else {
+        PathBuf::from(&manifest.managed_run_root).join("exports")
+    };
     export_project(&mut manifest, project_id, &export_dir)?;
     write_manifest(&manifest)?;
     Ok(manifest)
@@ -305,6 +518,10 @@ pub fn export_managed_project_to(
 pub fn recheck_source_fingerprints(manifest: &mut RunWorkspaceManifest) -> WorkspaceResult<()> {
     for project in &manifest.projects {
         let baseline = &project.source_fingerprint;
+        // Greenfield projects have no external source path to re-fingerprint.
+        if baseline.kind == "greenfield" || baseline.path.starts_with("greenfield:") {
+            continue;
+        }
         let current = capture_fingerprint(Path::new(&baseline.path), &baseline.kind)?;
         ensure_source_unchanged(baseline, &current)?;
     }
@@ -321,7 +538,7 @@ pub fn recheck_source_fingerprints(manifest: &mut RunWorkspaceManifest) -> Works
 pub fn find_managed_run_root(run_id: Uuid, candidates: &[PathBuf]) -> Option<PathBuf> {
     let run_dir = format!("run-{run_id}");
     for candidate in candidates {
-        if candidate.join("manifest.json").is_file() {
+        if manifest_file_path(candidate).is_file() {
             if let Ok(manifest) = load_manifest(candidate) {
                 if manifest.run_id == run_id {
                     return Some(candidate.clone());
@@ -329,7 +546,7 @@ pub fn find_managed_run_root(run_id: Uuid, candidates: &[PathBuf]) -> Option<Pat
             }
         }
         let nested = candidate.join(&run_dir);
-        if nested.join("manifest.json").is_file() {
+        if manifest_file_path(&nested).is_file() {
             if let Ok(manifest) = load_manifest(&nested) {
                 if manifest.run_id == run_id {
                     return Some(nested);

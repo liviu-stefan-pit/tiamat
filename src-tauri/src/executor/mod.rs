@@ -13,7 +13,10 @@ pub use diff::{
     DiffBoundaryReport,
 };
 pub use error::{ExecutorError, ExecutorResult};
-pub use prompt::{assemble_phase_prompt, assemble_recovery_prompt, RECOVERY_PROMPT_PREFIX};
+pub use prompt::{
+    assemble_phase_prompt, assemble_recovery_prompt, format_phase_plan_context,
+    RECOVERY_PROMPT_PREFIX,
+};
 pub use recover::{decide_partial_recovery, PartialRecoveryDecision};
 pub use result::{extract_phase_result, validate_phase_result_payload};
 pub use run::{execute_phase, map_result_status_to_phase, ExecutePhaseRequest};

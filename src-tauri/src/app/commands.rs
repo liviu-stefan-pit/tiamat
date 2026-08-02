@@ -734,7 +734,7 @@ pub fn run_architect_pipeline(
         serde_json::json!({ "runId": run_id }),
     )?;
 
-    let store = state.store.lock().map_err(|e| e.to_string())?;
+    // Short-lock AppState.store inside ProcessHost — never across the Cursor wait.
     let result = crate::planner::run_architect_pipeline(crate::planner::ArchitectPipelineRequest {
         run_id,
         preflight: &preflight,
@@ -743,11 +743,10 @@ pub fn run_architect_pipeline(
         executable_override: None,
         fake_cli_mode: None,
         host: Some(crate::process::HostedSpawnContext {
-            store: &store,
+            store: &state.store,
             host: &state.process_host,
         }),
     });
-    drop(store);
 
     *state.last_workspace.lock().map_err(|e| e.to_string())? = Some(workspace);
     *state.last_architect.lock().map_err(|e| e.to_string())? = Some(result.clone());
@@ -860,9 +859,12 @@ pub fn start_scheduler(
             .clamp(1, 4),
         ..SchedulerConfig::default()
     };
-    let store = state.store.lock().map_err(|e| e.to_string())?;
-    let snap =
-        scheduler::load_plan_into_scheduler(&store, &plan, &config).map_err(|e| e.to_string())?;
+    // Do not hold `store` across `emit_scheduler_event` — emit also locks the store
+    // (std::Mutex is not reentrant) and would deadlock the command.
+    let snap = {
+        let store = state.store.lock().map_err(|e| e.to_string())?;
+        scheduler::load_plan_into_scheduler(&store, &plan, &config).map_err(|e| e.to_string())?
+    };
     *state.last_scheduler.lock().map_err(|e| e.to_string())? = Some(snap.clone());
     emit_scheduler_event(
         &app,
@@ -1083,7 +1085,8 @@ pub fn emergency_abort(
         .map(|s| Uuid::parse_str(s))
         .transpose()
         .map_err(|e| e.to_string())?;
-    let store = state.store.lock().map_err(|e| e.to_string())?;
+    // Sidecar so Abort can poll/sleep without freezing UI (AppState.store stays free).
+    let store = open_app_store_sidecar(&state)?;
     let active_run = match run_uuid {
         Some(id) => store
             .get_run(id)
@@ -1179,7 +1182,7 @@ pub fn apply_close_policy(
         "stop_all_and_exit" | "stopAllAndExit" => crate::process::ClosePolicyChoice::StopAllAndExit,
         other => return Err(format!("unknown close policy: {other}")),
     };
-    let store = state.store.lock().map_err(|e| e.to_string())?;
+    let store = open_app_store_sidecar(&state)?;
     state
         .abort
         .apply_close_policy(&store, &state.process_host, run_uuid, choice)
@@ -1230,7 +1233,7 @@ pub fn execute_phase_fixture(
         .join("fake-agent.mjs");
     let exe = format!("node|{}", fake_js.display());
 
-    let store = state.store.lock().map_err(|e| e.to_string())?;
+    // Short-lock AppState.store inside ProcessHost — never across the fixture wait.
     let outcome = crate::executor::execute_phase(crate::executor::ExecutePhaseRequest {
         run_id,
         attempt_id: None,
@@ -1248,12 +1251,11 @@ pub fn execute_phase_fixture(
         establish_baseline: true,
         flaky_retry: true,
         host: Some(crate::process::HostedSpawnContext {
-            store: &store,
+            store: &state.store,
             host: &state.process_host,
         }),
     })
     .map_err(|e| e.to_string())?;
-    drop(store);
 
     *state.last_plan.lock().map_err(|e| e.to_string())? = Some(plan);
     *state.last_workspace.lock().map_err(|e| e.to_string())? = Some(workspace);
@@ -1480,6 +1482,55 @@ pub fn export_run_report(
         report_json,
         artifact_id: Some(artifact.artifact_id),
         relative_path: artifact.relative_path,
+    })
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportActivityLogResult {
+    pub path: Option<String>,
+    pub cancelled: bool,
+    pub byte_size: usize,
+}
+
+/// Save activity log text via a native Save dialog (WebView `<a download>` is unreliable).
+#[tauri::command]
+pub fn export_activity_log(
+    content: String,
+    default_file_name: Option<String>,
+) -> Result<ExportActivityLogResult, String> {
+    let (content, _) = redact_for_persistence(&content, &[]);
+    for secret in FORBIDDEN_FIXTURE_SECRETS {
+        if content.contains(secret) {
+            return Err(format!(
+                "refusing export: fixture secret would leak ({secret})"
+            ));
+        }
+    }
+    let suggested = default_file_name.unwrap_or_else(|| {
+        format!(
+            "tiamat-log-{}.txt",
+            chrono::Utc::now().format("%Y%m%d-%H%M%S")
+        )
+    });
+    let path = rfd::FileDialog::new()
+        .set_title("Export Tiamat activity log")
+        .set_file_name(&suggested)
+        .add_filter("Text", &["txt"])
+        .add_filter("All", &["*"])
+        .save_file();
+    let Some(path) = path else {
+        return Ok(ExportActivityLogResult {
+            path: None,
+            cancelled: true,
+            byte_size: content.len(),
+        });
+    };
+    std::fs::write(&path, content.as_bytes()).map_err(|e| e.to_string())?;
+    Ok(ExportActivityLogResult {
+        path: Some(path.display().to_string()),
+        cancelled: false,
+        byte_size: content.len(),
     })
 }
 
@@ -1904,7 +1955,6 @@ pub fn run_process_fixture(
     force_grace_ms: Option<u64>,
 ) -> Result<crate::process::HostedProcessOutcome, String> {
     let run_id = Uuid::parse_str(&run_id).map_err(|e| e.to_string())?;
-    let store = state.store.lock().map_err(|e| e.to_string())?;
     let fixture = tiamat_contracts::repo_root()
         .join("fixtures")
         .join("cursor-cli")
@@ -1923,7 +1973,7 @@ pub fn run_process_fixture(
     let outcome = state
         .process_host
         .run_hosted(
-            &store,
+            &state.store,
             crate::process::SpawnRequest {
                 run_id,
                 phase_id: Some("P07".into()),
@@ -1994,6 +2044,20 @@ fn emit_scheduler_event(
         .map_err(|e| e.to_string())?;
     let _ = app.emit(EVENT_CHANNEL, &envelope);
     Ok(())
+}
+
+/// Second SQLite connection so long-running work / abort polls do not hold AppState.store.
+fn open_app_store_sidecar(state: &AppState) -> Result<crate::db::Store, String> {
+    let (db_path, artifact_root) = {
+        let store = state.store.lock().map_err(|e| e.to_string())?;
+        let db_path = store
+            .db_path()
+            .ok_or_else(|| "cannot open sidecar store for in-memory DB".to_string())?
+            .to_path_buf();
+        let artifact_root = store.artifact_root().to_path_buf();
+        (db_path, artifact_root)
+    };
+    crate::db::Store::open(db_path, artifact_root).map_err(|e| e.to_string())
 }
 
 fn emit_planner_event(

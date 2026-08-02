@@ -15,7 +15,13 @@ pub fn quarantine_path(
     reason: &str,
     from_checkpoint_id: Option<&str>,
 ) -> WorkspaceResult<QuarantineRecord> {
-    let quarantine_root = PathBuf::from(&manifest.managed_run_root).join("quarantine");
+    let quarantine_root = if crate::workspace::greenfield::is_flat_layout(manifest) {
+        PathBuf::from(&manifest.managed_run_root)
+            .join(".tiamat")
+            .join("quarantine")
+    } else {
+        PathBuf::from(&manifest.managed_run_root).join("quarantine")
+    };
     fs::create_dir_all(&quarantine_root)?;
     let quarantine_id = format!("q-{}", Uuid::new_v4());
     let dest = quarantine_root.join(&quarantine_id);

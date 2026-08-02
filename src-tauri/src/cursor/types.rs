@@ -238,6 +238,10 @@ pub struct StreamParseResult {
     pub chat_id: Option<String>,
     pub usage: Option<CursorUsage>,
     pub assistant_text: String,
+    /// Markdown harvested from CreatePlan / plan-tool arguments (plan mode).
+    /// Cursor plan mode often puts the real document here instead of assistant text.
+    #[serde(default)]
+    pub plan_markdown: String,
     pub diagnostics: Vec<String>,
     pub terminal_ok: Option<bool>,
 }

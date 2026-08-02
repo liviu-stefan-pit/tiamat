@@ -2,6 +2,7 @@
 //! Asserts child/grandchild/resistant fake CLIs leave zero surviving owned processes.
 
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use tempfile::tempdir;
@@ -40,9 +41,11 @@ fn fake_cli_argv() -> Vec<String> {
 
 fn run_mode(mode: &str, watchdog: WatchdogConfig) -> tiamat_lib::process::HostedProcessOutcome {
     let dir = tempdir().unwrap();
-    let store = Store::open_in_memory(dir.path()).unwrap();
+    let store = Mutex::new(Store::open_in_memory(dir.path()).unwrap());
     let run_id = Uuid::new_v4();
     store
+        .lock()
+        .unwrap()
         .create_run(run_id, "P07 process tree", "executing")
         .unwrap();
     let host = ProcessHost::new();
@@ -166,9 +169,9 @@ fn resume_success_same_chat_after_timeout_metadata() {
 
     // Second: resume_success honors --resume with same chat.
     let dir = tempdir().unwrap();
-    let store = Store::open_in_memory(dir.path()).unwrap();
+    let store = Mutex::new(Store::open_in_memory(dir.path()).unwrap());
     let run_id = Uuid::new_v4();
-    store.create_run(run_id, "resume", "executing").unwrap();
+    store.lock().unwrap().create_run(run_id, "resume", "executing").unwrap();
     let host = ProcessHost::new();
     let mut argv = fake_cli_argv();
     argv.extend(["--resume".into(), chat.clone(), "--print".into()]);
@@ -203,9 +206,9 @@ fn resume_success_same_chat_after_timeout_metadata() {
 #[test]
 fn registry_empty_after_cleanup_and_terminal_gate() {
     let dir = tempdir().unwrap();
-    let store = Store::open_in_memory(dir.path()).unwrap();
+    let store = Mutex::new(Store::open_in_memory(dir.path()).unwrap());
     let run_id = Uuid::new_v4();
-    store.create_run(run_id, "gate", "executing").unwrap();
+    store.lock().unwrap().create_run(run_id, "gate", "executing").unwrap();
     let host = ProcessHost::new();
     let outcome = run_argv_hosted_for_tests(
         &store,
@@ -222,10 +225,11 @@ fn registry_empty_after_cleanup_and_terminal_gate() {
     )
     .unwrap();
     assert_zero_survivors(&outcome);
-    assert_eq!(store.active_process_count(Some(run_id)).unwrap(), 0);
-    let procs = store.list_processes_for_run(run_id).unwrap();
+    let guard = store.lock().unwrap();
+    assert_eq!(guard.active_process_count(Some(run_id)).unwrap(), 0);
+    let procs = guard.list_processes_for_run(run_id).unwrap();
     assert!(procs.iter().all(|p| p.state == ProcessState::Reaped));
-    store.assert_run_may_become_terminal(run_id).unwrap();
+    guard.assert_run_may_become_terminal(run_id).unwrap();
 }
 
 #[test]
@@ -245,7 +249,7 @@ fn cancel_path_leaves_zero_survivors() {
     let artifacts2 = artifacts.clone();
 
     let worker = std::thread::spawn(move || {
-        let store = Store::open(&db2, &artifacts2).unwrap();
+        let store = Mutex::new(Store::open(&db2, &artifacts2).unwrap());
         run_argv_hosted_for_tests(
             &store,
             &host_b,
@@ -296,9 +300,9 @@ fn crash_simulation_kill_on_close_via_job_drop() {
 #[test]
 fn hosted_spawn_defaults_to_attribute_list_association() {
     let dir = tempdir().unwrap();
-    let store = Store::open_in_memory(dir.path()).unwrap();
+    let store = Mutex::new(Store::open_in_memory(dir.path()).unwrap());
     let run_id = Uuid::new_v4();
-    store.create_run(run_id, "assoc", "executing").unwrap();
+    store.lock().unwrap().create_run(run_id, "assoc", "executing").unwrap();
     let host = ProcessHost::new();
     #[cfg(windows)]
     let argv = vec![
@@ -333,7 +337,8 @@ fn hosted_spawn_defaults_to_attribute_list_association() {
         )
         .expect("hosted cmd");
     assert_zero_survivors(&outcome);
-    let procs = store.list_processes_for_run(run_id).unwrap();
+    let guard = store.lock().unwrap();
+    let procs = guard.list_processes_for_run(run_id).unwrap();
     assert_eq!(procs.len(), 1);
     assert!(procs[0].job_associated);
     assert_ne!(procs[0].creation_time_100ns, Some(0));
@@ -348,15 +353,17 @@ fn hosted_spawn_defaults_to_attribute_list_association() {
             serde_json::json!(true)
         );
     }
-    store.assert_run_may_become_terminal(run_id).unwrap();
+    guard.assert_run_may_become_terminal(run_id).unwrap();
 }
 
 #[test]
 fn hosted_cmd_wrapper_runs_architect_plan_mode() {
     let dir = tempdir().unwrap();
-    let store = Store::open(dir.path().join("tiamat.db"), dir.path().join("artifacts")).unwrap();
+    let store = Mutex::new(Store::open(dir.path().join("tiamat.db"), dir.path().join("artifacts")).unwrap());
     let run_id = Uuid::new_v4();
     store
+        .lock()
+        .unwrap()
         .create_run(run_id, "architect cmd", "planning")
         .unwrap();
     let host = ProcessHost::new();
@@ -436,9 +443,9 @@ fn ps1_dash_trap_fails_with_lone_dash_but_prepare_strips_it() {
         "-".into(),
     ];
     let dir = tempdir().unwrap();
-    let store = Store::open_in_memory(dir.path()).unwrap();
+    let store = Mutex::new(Store::open_in_memory(dir.path()).unwrap());
     let run_id = Uuid::new_v4();
-    store.create_run(run_id, "dash-trap", "planning").unwrap();
+    store.lock().unwrap().create_run(run_id, "dash-trap", "planning").unwrap();
     let host = ProcessHost::new();
     let bad = run_capture_hosted(
         &store,
@@ -475,6 +482,8 @@ fn ps1_dash_trap_fails_with_lone_dash_but_prepare_strips_it() {
     assert!(!prepared.iter().any(|a| a == "-"));
     let run_id2 = Uuid::new_v4();
     store
+        .lock()
+        .unwrap()
         .create_run(run_id2, "dash-trap-ok", "planning")
         .unwrap();
     let good = run_capture_hosted(

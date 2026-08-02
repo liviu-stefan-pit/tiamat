@@ -13,8 +13,8 @@ use crate::db::Store;
 use crate::intake::PreflightReport;
 use crate::planner::context::package_architect_context;
 use crate::planner::invoke::build_architect_command;
-use crate::planner::model::select_architect_model;
 use crate::planner::md_plan::{compile_master_plan_markdown, extract_master_plan_markdown};
+use crate::planner::model::select_architect_model;
 use crate::planner::persist::{checkpoint_control_plan, write_architect_plan_artifacts};
 use crate::planner::prompt::{repair_prompt, ARCHITECT_SYSTEM_PROMPT};
 use crate::planner::types::{
@@ -25,7 +25,7 @@ use crate::process::{
     run_capture_hosted, watchdog_for_timeout, HostedSpawnContext, ProcessHost, SpawnRequest,
 };
 use crate::security::{check_prompt_size, redact_line, OutputLimitConfig};
-use crate::workspace::{write_manifest, RunWorkspaceManifest};
+use crate::workspace::{bootstrap_plan_greenfield_projects, write_manifest, RunWorkspaceManifest};
 
 fn architect_timeout_ms() -> u64 {
     crate::cursor::TimeoutSettings::from_env().architect_timeout_ms
@@ -160,11 +160,20 @@ pub fn run_architect_pipeline(req: ArchitectPipelineRequest<'_>) -> ArchitectRun
             if let Some(parent_chat) = parent_chat {
                 // One repair resume only.
                 evidence.push("repair_resume_started".into());
+                let preview: Vec<String> = issues.iter().take(3).cloned().collect();
+                let repair_msg = if preview.is_empty() {
+                    "First plan was invalid; architect is repairing it (one retry)".into()
+                } else {
+                    format!(
+                        "First plan was invalid; architect is repairing it (one retry). Causes: {}",
+                        preview.join(" | ")
+                    )
+                };
                 emit_architect_event(
                     req.host.as_ref(),
                     req.run_id,
                     "plan.repair_started",
-                    "First plan was invalid; architect is repairing it (one retry)",
+                    &repair_msg,
                 );
                 let repair = repair_prompt(&issues);
                 match invoke_and_validate(
@@ -237,6 +246,27 @@ pub fn run_architect_pipeline(req: ArchitectPipelineRequest<'_>) -> ArchitectRun
         }
     };
     let _ = chat_id;
+
+    // Materialize any plan-referenced projects/<slug> roots (notes-only greenfield).
+    match bootstrap_plan_greenfield_projects(req.workspace, &plan) {
+        Ok(created) => {
+            for id in created {
+                evidence.push(format!("greenfield_project_created={id}"));
+            }
+            if let Err(err) = write_manifest(req.workspace) {
+                evidence.push(format!("manifest rewrite warning after greenfield: {err}"));
+            }
+        }
+        Err(err) => {
+            return fail(
+                req.run_id,
+                model_selection,
+                attempts,
+                evidence,
+                format!("greenfield project bootstrap failed: {err}"),
+            );
+        }
+    }
 
     // Persist architect MD (canonical) + derived plan.json + schedule projection.
     let (json_path, md_path, hashes) =
@@ -406,7 +436,12 @@ fn invoke_and_validate(
             env.insert("TIAMAT_FAKE_CLI_MODE".into(), mode.to_string());
         }
         env.insert("TIAMAT_FAKE_PLAN_RUN_ID".into(), run_id.to_string());
-        if let Some(project) = workspace.projects.first() {
+        if let Some(project) = workspace
+            .projects
+            .iter()
+            .find(|p| crate::workspace::is_writable_project_kind(&p.kind))
+            .or_else(|| workspace.projects.first())
+        {
             env.insert(
                 "TIAMAT_FAKE_PLAN_PROJECT_ID".into(),
                 project.project_id.clone(),
@@ -458,11 +493,14 @@ fn invoke_and_validate(
     if let Some(warning) = &capture.cleanup_warning {
         evidence.push(format!("cleanup_warning: {warning}"));
     }
-    if capture.exit_code.unwrap_or(1) != 0 {
-        issues.push(format!(
-            "architect exited with code {:?}",
-            capture.exit_code
-        ));
+    // Missing exit code is non-fatal when the stream produced a usable plan; only
+    // treat an explicit nonzero code as a process fault.
+    if let Some(code) = capture.exit_code {
+        if code != 0 {
+            issues.push(format!("architect exited with code {code}"));
+        }
+    } else {
+        evidence.push("architect_exit_code=None (ignored if plan validates)".into());
     }
     if parsed.terminal_ok == Some(false) {
         issues.push("architect stream reported terminal error (result subtype=error)".into());
@@ -481,8 +519,25 @@ fn invoke_and_validate(
         capture.stderr.len()
     ));
 
-    // Prefer assembled assistant markdown; never treat session/control frames as the plan.
-    let markdown = match extract_master_plan_markdown(&parsed.assistant_text) {
+    // Prefer assembled assistant markdown; also accept CreatePlan.plan from plan mode
+    // (Cursor often puts the real MASTER-PLAN there instead of chat text).
+    let plan_source = {
+        let mut parts = Vec::new();
+        if !parsed.plan_markdown.trim().is_empty() {
+            parts.push(parsed.plan_markdown.trim().to_string());
+        }
+        if !parsed.assistant_text.trim().is_empty() {
+            parts.push(parsed.assistant_text.trim().to_string());
+        }
+        parts.join("\n\n")
+    };
+    if !parsed.plan_markdown.trim().is_empty() {
+        evidence.push(format!(
+            "harvested_createplan_markdown_chars={}",
+            parsed.plan_markdown.chars().count()
+        ));
+    }
+    let markdown = match extract_master_plan_markdown(&plan_source) {
         Ok(md) => md,
         Err(err) => {
             issues.push(err);
@@ -583,12 +638,12 @@ fn invoke_and_validate(
 
     match validate_plan_json(&json_text, run_id, workspace) {
         Ok(plan) => {
-            if !issues.is_empty()
-                && (capture.timed_out
-                    || capture.exit_code.unwrap_or(1) != 0
-                    || capture.truncated
-                    || parsed.terminal_ok == Some(false))
-            {
+            let process_failed = capture.timed_out
+                || capture.truncated
+                || capture.flood_detected
+                || parsed.terminal_ok == Some(false)
+                || capture.exit_code.map(|c| c != 0).unwrap_or(false);
+            if !issues.is_empty() && process_failed {
                 attempts.push(ArchitectAttemptRecord {
                     attempt: (attempts.len() as u32) + 1,
                     model: model.to_string(),
@@ -656,7 +711,11 @@ fn expand_executable_argv(argv: &[String]) -> Vec<String> {
 }
 
 fn architect_workspace_mount(workspace: &RunWorkspaceManifest) -> PathBuf {
-    // Prefer notes (rough-spec) then control root — never a product write root alone.
+    // Flat notes→product: mount the product/control root so `.tiamat/` is in-workspace.
+    if crate::workspace::is_flat_layout(workspace) {
+        return PathBuf::from(&workspace.control_root);
+    }
+    // Isolated: prefer notes (rough-spec) then control root.
     if let Some(notes) = workspace.notes_roots.first() {
         return PathBuf::from(notes);
     }
@@ -802,14 +861,18 @@ fn run_architect_hosted(
     };
     match host {
         Some(ctx) => {
-            let _ = ctx.store.ensure_run(run_id, "architect", "planning");
+            let _ = ctx.store.lock().ok().and_then(|s| {
+                s.ensure_run(run_id, "architect", "planning").ok()
+            });
             run_capture_hosted(ctx.store, ctx.host, request).map_err(|e| e.to_string())
         }
         None => {
             let dir = std::env::temp_dir().join(format!("tiamat-architect-{}", Uuid::new_v4()));
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-            let store = Store::open_in_memory(&dir).map_err(|e| e.to_string())?;
-            let _ = store.ensure_run(run_id, "architect-ephemeral", "planning");
+            let store = std::sync::Mutex::new(Store::open_in_memory(&dir).map_err(|e| e.to_string())?);
+            let _ = store.lock().ok().and_then(|s| {
+                s.ensure_run(run_id, "architect-ephemeral", "planning").ok()
+            });
             let ph = ProcessHost::new();
             run_capture_hosted(&store, &ph, request).map_err(|e| e.to_string())
         }
@@ -825,7 +888,10 @@ fn emit_architect_event(
     let Some(ctx) = host else {
         return;
     };
-    if let Ok(envelope) = ctx.store.append_event_atomic(
+    let Ok(store) = ctx.store.lock() else {
+        return;
+    };
+    if let Ok(envelope) = store.append_event_atomic(
         None,
         crate::db::NewEvent {
             event_id: Uuid::new_v4(),
@@ -841,7 +907,8 @@ fn emit_architect_event(
             payload: serde_json::json!({ "runId": run_id }),
         },
     ) {
-        let _ = ctx.store.mark_outbox_delivered(&[envelope.event_id]);
+        let _ = store.mark_outbox_delivered(&[envelope.event_id]);
+        drop(store);
         ctx.host.publish_live(&envelope);
     }
 }

@@ -11,7 +11,39 @@ use crate::db::error::{DbError, DbResult};
 use crate::db::migrations::{self, latest_migration_version};
 use crate::db::types::{level_from_str, level_to_str, ArtifactRecord, NewEvent, RunRecord};
 
-const BUSY_TIMEOUT_MS: i64 = 5_000;
+const BUSY_TIMEOUT_MS: i64 = 30_000;
+
+/// True when the error is SQLITE_BUSY / SQLITE_LOCKED (including wrapped messages).
+pub fn is_sqlite_busy(err: &DbError) -> bool {
+    match err {
+        DbError::Sqlite(rusqlite::Error::SqliteFailure(info, _)) => matches!(
+            info.code,
+            rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+        ),
+        other => {
+            let msg = other.to_string().to_ascii_lowercase();
+            msg.contains("database is locked") || msg.contains("database is busy")
+        }
+    }
+}
+
+/// Retry a DB operation when SQLite reports busy/locked (safety net for residual races).
+pub fn with_busy_retry<T>(mut f: impl FnMut() -> DbResult<T>) -> DbResult<T> {
+    let mut delay_ms = 25u64;
+    for attempt in 0..8u32 {
+        match f() {
+            Ok(v) => return Ok(v),
+            Err(e) if is_sqlite_busy(&e) && attempt + 1 < 8 => {
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                delay_ms = (delay_ms.saturating_mul(2)).min(1_000);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(DbError::Validation(
+        "exhausted sqlite busy retries".into(),
+    ))
+}
 
 pub struct Store {
     conn: Connection,
@@ -607,6 +639,22 @@ mod tests {
         assert!(matches!(err, DbError::DuplicateEvent(_)));
         assert_eq!(store.get_run(run_id).unwrap().unwrap().status, "planning");
         assert_eq!(store.replay_events(run_id, 0).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn busy_retry_succeeds_after_transient_lock() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        let hits = AtomicU32::new(0);
+        let result = with_busy_retry(|| {
+            let n = hits.fetch_add(1, Ordering::SeqCst);
+            if n < 2 {
+                Err(DbError::Validation("sqlite error: database is locked".into()))
+            } else {
+                Ok(42)
+            }
+        });
+        assert_eq!(result.unwrap(), 42);
+        assert!(hits.load(Ordering::SeqCst) >= 3);
     }
 
     #[test]

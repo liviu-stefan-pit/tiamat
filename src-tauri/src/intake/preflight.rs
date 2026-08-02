@@ -213,8 +213,16 @@ pub fn run_preflight_with_configured(
     };
 
     let read_roots: Vec<String> = roots.iter().map(|p| p.display().to_string()).collect();
-    let write_roots_preview =
-        vec!["<managed-run-root>/projects/* (created at Start; not yet allocated)".into()];
+    let notes_only = !manifest.projects.is_empty()
+        && manifest
+            .projects
+            .iter()
+            .all(|p| matches!(p.kind, tiamat_contracts::ProjectKind::Notes));
+    let write_roots_preview = if notes_only {
+        vec!["<output-dir> (flat product root + .tiamat/ plan files; created at Start)".into()]
+    } else {
+        vec!["<managed-run-root>/projects/* (created at Start; not yet allocated)".into()]
+    };
 
     let mut report = PreflightReport {
         schema_version: tiamat_contracts::CURRENT_SCHEMA_VERSION,

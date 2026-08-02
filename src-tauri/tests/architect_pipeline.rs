@@ -208,7 +208,12 @@ fn architect_invalid_fails_after_one_repair_with_evidence() {
         host: None,
     });
     assert!(!result.ok);
-    assert!(result.error.as_ref().unwrap().contains("repair failed"));
+    let err = result.error.as_ref().expect("expected error");
+    assert!(
+        err.contains("repair failed"),
+        "unexpected error (attempts={}): {err}",
+        result.attempts.len()
+    );
     assert_eq!(result.attempts.len(), 2);
     assert!(!result.attempts[0].repaired);
     assert!(result.attempts[1].repaired);

@@ -2,8 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const DEFAULT_MAX_LINE_BYTES: usize = 64 * 1024;
-pub const DEFAULT_MAX_TOTAL_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
+pub const DEFAULT_MAX_LINE_BYTES: usize = 512 * 1024;
+pub const DEFAULT_MAX_TOTAL_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 pub const DEFAULT_MAX_PROMPT_BYTES: usize = 512 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

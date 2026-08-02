@@ -78,10 +78,15 @@ pub fn package_architect_context(
 
     sections.push("## Managed projects\n".into());
     for project in &workspace.projects {
+        let writable = !matches!(
+            project.kind,
+            crate::workspace::ManagedProjectKind::NotesSnapshot
+        );
         sections.push(format!(
-            "- projectId={} kind={:?} managedRoot={} writeRoot={} baseline={:?}\n",
+            "- projectId={} kind={:?} writable={} managedRoot={} writeRoot={} baseline={:?}\n",
             project.project_id,
             project.kind,
+            writable,
             project.managed_root,
             project.write_root,
             project.baseline_commit
@@ -115,18 +120,62 @@ pub fn package_architect_context(
         );
     }
 
-    sections.push(format!(
-        "## Approved roots\n- readRoots: {:?}\n- writeRootsPreview: {:?}\n",
-        preflight.read_roots, preflight.write_roots_preview
-    ));
+    let writable_ids: Vec<&str> = workspace
+        .projects
+        .iter()
+        .filter(|p| !matches!(p.kind, crate::workspace::ManagedProjectKind::NotesSnapshot))
+        .map(|p| p.project_id.as_str())
+        .collect();
+    let writable_roots: Vec<&str> = workspace
+        .projects
+        .iter()
+        .filter(|p| !matches!(p.kind, crate::workspace::ManagedProjectKind::NotesSnapshot))
+        .map(|p| p.write_root.as_str())
+        .collect();
 
-    sections.push(
-        "## Output contract\nReturn one complete MASTER-PLAN.md (fenced ```markdown or raw \
-         Markdown) using the structured phase/final-gate contract from the system prompt. \
-         Do not return ProjectPlan JSON. Phases must use approved managed write/read roots. \
-         Do not implement product code. Tiamat compiles .tiamat/plan.json from your Markdown.\n"
-            .into(),
-    );
+    if crate::workspace::is_flat_layout(workspace) {
+        sections.push(format!(
+            "## Approved roots (flat notes → product output)\n\
+             - writableProjectIds: {:?}\n\
+             - writeRoots (exact paths; copy these): {:?}\n\
+             - product root = managedRunRoot = controlRoot — build phases directly here\n\
+             - plan files land in `{{writeRoot}}/.tiamat/` (MASTER-PLAN.md, plan.json)\n\
+             - do NOT invent nested `projects/<slug>` roots or duplicate `.tiamat` elsewhere\n\
+             - notesRoots / intake paths: read-only — never use as writeRoots\n\
+             - intakeReadRoots: {:?}\n",
+            writable_ids, writable_roots, preflight.read_roots
+        ));
+        sections.push(
+            "## Output contract\nReturn one complete MASTER-PLAN.md (fenced ```markdown or raw \
+             Markdown) using the structured phase/final-gate contract from the system prompt. \
+             Do not return ProjectPlan JSON. Phases must use the approved product write root above \
+             (the output folder itself). Do not invent paths outside that root. Do not implement \
+             product code. Tiamat compiles .tiamat/plan.json from your Markdown.\n"
+                .into(),
+        );
+    } else {
+        let projects_parent = format!(
+            "{}/projects",
+            workspace.managed_run_root.trim_end_matches(['/', '\\'])
+        );
+        sections.push(format!(
+            "## Approved roots\n\
+             - writableProjectIds: {:?}\n\
+             - writeRoots (exact paths; copy these): {:?}\n\
+             - additionalGreenfieldAllowed: `{projects_parent}/<slug>` (slug = [a-z0-9][a-z0-9_-]*; Tiamat creates it)\n\
+             - notesRoots: read-only — never use as writeRoots\n\
+             - intakeReadRoots: {:?}\n",
+            writable_ids, writable_roots, preflight.read_roots
+        ));
+        sections.push(
+            "## Output contract\nReturn one complete MASTER-PLAN.md (fenced ```markdown or raw \
+             Markdown) using the structured phase/final-gate contract from the system prompt. \
+             Do not return ProjectPlan JSON. Phases must use approved managed write/read roots \
+             (or a new slug under managed projects/). Do not invent paths outside the managed run. \
+             Do not implement product code. Tiamat compiles .tiamat/plan.json from your Markdown.\n"
+                .into(),
+        );
+    }
 
     let mut text = sections.join("\n");
     if text.len() > CONTEXT_CHAR_BUDGET {
@@ -339,6 +388,91 @@ mod tests {
         assert!(packaged.text.contains("rough idea"));
         assert!(packaged.omitted.iter().any(|o| o.contains("binary")));
         assert!(packaged.coverage.iter().any(|c| c.contains("NOTES.md")));
+        assert!(packaged.text.contains("writableProjectIds"));
+        assert!(packaged.text.contains("additionalGreenfieldAllowed"));
+        assert!(packaged.text.contains("notesRoots: read-only"));
         assert!(packaged.text.len() <= CONTEXT_CHAR_BUDGET + 200);
+    }
+
+    #[test]
+    fn flat_layout_context_omits_nested_projects_greenfield() {
+        let dir = tempdir().unwrap();
+        let notes = dir.path().join("NOTES.md");
+        std::fs::write(&notes, "idea\n").unwrap();
+        let out = dir.path().join("out");
+        std::fs::create_dir_all(&out).unwrap();
+
+        let manifest: IntakeManifest = serde_json::from_value(json!({
+            "schemaVersion": 1,
+            "intakeId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+            "sources": [{"path": notes.display().to_string(), "kind": "file", "readOnly": true}],
+            "projects": [{
+                "projectId": "notes",
+                "root": notes.display().to_string(),
+                "kind": "notes",
+                "languages": [],
+                "buildSystems": [],
+                "testCommands": [],
+                "warnings": []
+            }],
+            "inventoryArtifact": "inv"
+        }))
+        .unwrap();
+
+        let preflight = PreflightReport {
+            schema_version: 1,
+            manifest,
+            inventory: crate::intake::InventorySummary {
+                file_count: 1,
+                dir_count: 0,
+                total_bytes: 5,
+                ignored_count: 0,
+                truncated: false,
+                truncation_reason: None,
+                estimated_copy_bytes: 5,
+            },
+            warnings: vec![],
+            blockers: vec![],
+            secret_risks: vec![],
+            escape_attempts: vec![],
+            trust: crate::intake::TrustState {
+                confirmed: true,
+                acknowledged_untrusted: true,
+                acknowledged_execution_risk: true,
+            },
+            cursor: crate::intake::CursorProbeStub::default(),
+            can_start: true,
+            read_roots: vec![notes.display().to_string()],
+            write_roots_preview: vec![out.display().to_string()],
+            limits: crate::intake::IntakeLimits::default(),
+            untrusted_content_notice: "untrusted".into(),
+        };
+
+        let workspace = RunWorkspaceManifest {
+            schema_version: 1,
+            run_id: uuid::Uuid::nil(),
+            intake_id: uuid::Uuid::nil(),
+            managed_run_root: out.display().to_string(),
+            control_root: out.display().to_string(),
+            projects: vec![],
+            notes_roots: vec![notes.display().to_string()],
+            checkpoints: vec![],
+            quarantines: vec![],
+            promotion: crate::workspace::PromotionMetadata {
+                status: crate::workspace::PromotionStatus::Unpromoted,
+                export_path: None,
+                promoted_at_utc: None,
+                notes: None,
+            },
+            retention: crate::workspace::RetentionPolicy::default(),
+            fingerprint_pairs: vec![],
+            created_at_utc: chrono::Utc::now(),
+            source_unchanged: true,
+        };
+
+        let packaged = package_architect_context(&preflight, &workspace);
+        assert!(packaged.text.contains("flat notes"));
+        assert!(packaged.text.contains("do NOT invent nested"));
+        assert!(!packaged.text.contains("additionalGreenfieldAllowed"));
     }
 }

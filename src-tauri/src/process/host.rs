@@ -44,10 +44,23 @@ pub struct ProcessHost {
     event_sink: Mutex<Option<EventSink>>,
 }
 
-/// Borrowed ProcessHost + Store for production Cursor/agent/verification spawns.
+/// Borrowed ProcessHost + mutexed Store for production Cursor/agent/verification spawns.
+///
+/// The mutex is locked only for short DB ops — never across the agent wait — so the
+/// orchestrator loop / UI can use the same connection without a second SQLite handle.
 pub struct HostedSpawnContext<'a> {
-    pub store: &'a Store,
+    pub store: &'a Mutex<Store>,
     pub host: &'a ProcessHost,
+}
+
+fn store_op<T>(
+    store: &Mutex<Store>,
+    f: impl FnOnce(&Store) -> crate::db::DbResult<T>,
+) -> ProcessResult<T> {
+    let guard = store
+        .lock()
+        .map_err(|e| ProcessError::Registry(format!("store lock poisoned: {e}")))?;
+    f(&*guard).map_err(ProcessError::from)
 }
 
 impl Default for ProcessHost {
@@ -91,7 +104,7 @@ impl ProcessHost {
     /// Register + spawn into a kill-on-close Job Object, run watchdog, stop/reap, persist cleanup.
     pub fn run_hosted(
         &self,
-        store: &Store,
+        store: &Mutex<Store>,
         request: SpawnRequest,
     ) -> ProcessResult<HostedProcessOutcome> {
         let process_id = Uuid::new_v4();
@@ -127,7 +140,7 @@ impl ProcessHost {
                 "watchdog": request.watchdog,
             }),
         };
-        store.upsert_process(&record)?;
+        store_op(store, |s| s.upsert_process(&record))?;
         // Intentionally quiet: registration is internal; the agent.started event below is the user signal.
 
         let (spawned, mut child) = spawn::spawn_hosted(
@@ -159,7 +172,7 @@ impl ProcessHost {
             "association": association_label,
             "degradedAssociation": spawned.degraded_association,
         });
-        store.upsert_process(&record)?;
+        store_op(store, |s| s.upsert_process(&record))?;
         let agent_label = record
             .phase_id
             .as_deref()
@@ -189,7 +202,7 @@ impl ProcessHost {
         }
 
         record.state = ProcessState::Active;
-        store.upsert_process(&record)?;
+        store_op(store, |s| s.upsert_process(&record))?;
 
         let cancel = Arc::new(AtomicBool::new(false));
         let force = Arc::new(AtomicBool::new(false));
@@ -265,7 +278,7 @@ impl ProcessHost {
             record.state = ProcessState::Reaped;
             record.reaped_at_utc = Some(chrono::Utc::now().to_rfc3339());
             record.exit_code = outcome.exit_code;
-            store.upsert_process(&record)?;
+            store_op(store, |s| s.upsert_process(&record))?;
             if cleanup_ok {
                 let label = record
                     .phase_id
@@ -376,7 +389,7 @@ impl ProcessHost {
     #[allow(clippy::too_many_arguments)]
     fn wait_with_watchdog(
         &self,
-        store: &Store,
+        store: &Mutex<Store>,
         record: &mut ProcessRecord,
         child: &mut HostedChild,
         process_id: Uuid,
@@ -438,7 +451,7 @@ impl ProcessHost {
                 record.state = ProcessState::ForcedStop;
                 record.stopped_at_utc = Some(chrono::Utc::now().to_rfc3339());
                 record.terminal_reason = Some("forced_abort".into());
-                let _ = store.upsert_process(record);
+                let _ = store_op(store, |s| s.upsert_process(record));
                 force_terminate_live(self, process_id);
                 let _ = child.kill();
                 break;
@@ -451,7 +464,7 @@ impl ProcessHost {
                     record.state = ProcessState::ForcedStop;
                     record.terminal_reason = Some("forced_abort".into());
                     record.stopped_at_utc = Some(chrono::Utc::now().to_rfc3339());
-                    let _ = store.upsert_process(record);
+                    let _ = store_op(store, |s| s.upsert_process(record));
                     force_terminate_live(self, process_id);
                     let _ = child.kill();
                     killed = true;
@@ -460,7 +473,7 @@ impl ProcessHost {
                 record.state = ProcessState::GracefulStop;
                 record.stopped_at_utc = Some(chrono::Utc::now().to_rfc3339());
                 record.terminal_reason = Some("cancelled".into());
-                let _ = store.upsert_process(record);
+                let _ = store_op(store, |s| s.upsert_process(record));
                 let _ = emit_process_event(
                     self,
                     store,
@@ -486,7 +499,7 @@ impl ProcessHost {
                     killed = true;
                     record.state = ProcessState::ForcedStop;
                     record.terminal_reason = Some("forced_after_grace".into());
-                    let _ = store.upsert_process(record);
+                    let _ = store_op(store, |s| s.upsert_process(record));
                     force_terminate_live(self, process_id);
                     let _ = child.kill();
                 }
@@ -519,7 +532,7 @@ impl ProcessHost {
                 record.state = ProcessState::GracefulStop;
                 record.stopped_at_utc = Some(chrono::Utc::now().to_rfc3339());
                 record.terminal_reason = Some("timed_out".into());
-                let _ = store.upsert_process(record);
+                let _ = store_op(store, |s| s.upsert_process(record));
                 let _ = emit_process_event(
                     self,
                     store,
@@ -540,7 +553,7 @@ impl ProcessHost {
                 if exit_code.is_none() {
                     killed = true;
                     record.state = ProcessState::ForcedStop;
-                    let _ = store.upsert_process(record);
+                    let _ = store_op(store, |s| s.upsert_process(record));
                     let _ = emit_process_event(
                         self,
                         store,
@@ -624,7 +637,7 @@ impl ProcessHost {
         if let Some(ref meta) = resume {
             record.resume_metadata = meta.to_value();
             record.chat_id = chat_id.clone();
-            let _ = store.upsert_process(record);
+            let _ = store_op(store, |s| s.upsert_process(record));
             let _ = emit_process_event(
                 self,
                 store,
@@ -666,7 +679,7 @@ fn force_terminate_live(host: &ProcessHost, process_id: Uuid) {
 
 fn finalize_cleanup(
     host: &ProcessHost,
-    store: &Store,
+    store: &Mutex<Store>,
     record: &ProcessRecord,
     spawned: &SpawnedInJob,
     _was_stopped: bool,
@@ -708,7 +721,7 @@ fn finalize_cleanup(
             "observedBeforeClose": active_after,
         }),
     };
-    store.insert_cleanup_proof(&proof)?;
+    store_op(store, |s| s.insert_cleanup_proof(&proof))?;
 
     // Close process handle; job drops after this function (kill-on-close).
     #[cfg(windows)]
@@ -727,7 +740,7 @@ fn finalize_cleanup(
         "handlesClosed": true,
         "zeroActiveObserved": zero,
     });
-    store.insert_cleanup_proof(&proof_closed)?;
+    store_op(store, |s| s.insert_cleanup_proof(&proof_closed))?;
 
     // Only surface cleanup failures in the activity log; success is covered by agent.finished.
     if !zero {
@@ -794,7 +807,7 @@ fn extract_chat_id_heuristic(stdout: &str) -> Option<String> {
 
 fn emit_process_event(
     host: &ProcessHost,
-    store: &Store,
+    store: &Mutex<Store>,
     record: &ProcessRecord,
     event_type: &str,
     message: &str,
@@ -805,30 +818,32 @@ fn emit_process_event(
     } else {
         EventLevel::Info
     };
-    let envelope = store.append_event_atomic(
-        None,
-        NewEvent {
-            event_id: Uuid::new_v4(),
-            run_id: record.run_id,
-            project_id: None,
-            phase_id: record.phase_id.clone(),
-            attempt_id: record.attempt_id,
-            process_id: Some(record.process_id),
-            event_type: event_type.into(),
-            level,
-            timestamp_utc: chrono::Utc::now(),
-            message: message.into(),
-            payload,
-        },
-    )?;
-    let _ = store.mark_outbox_delivered(&[envelope.event_id]);
+    let envelope = store_op(store, |s| {
+        s.append_event_atomic(
+            None,
+            NewEvent {
+                event_id: Uuid::new_v4(),
+                run_id: record.run_id,
+                project_id: None,
+                phase_id: record.phase_id.clone(),
+                attempt_id: record.attempt_id,
+                process_id: Some(record.process_id),
+                event_type: event_type.into(),
+                level,
+                timestamp_utc: chrono::Utc::now(),
+                message: message.into(),
+                payload,
+            },
+        )
+    })?;
+    let _ = store_op(store, |s| s.mark_outbox_delivered(&[envelope.event_id]));
     host.emit_live(&envelope);
     Ok(())
 }
 
 /// Run argv under ProcessHost and map to a simple capture for Cursor/executor callers.
 pub fn run_capture_hosted(
-    store: &Store,
+    store: &Mutex<Store>,
     host: &ProcessHost,
     request: SpawnRequest,
 ) -> ProcessResult<crate::cursor::ProcessCapture> {
@@ -864,7 +879,7 @@ pub fn watchdog_for_timeout(timeout_ms: u64) -> WatchdogConfig {
 
 /// Convenience: run argv under the process host with test watchdog timings.
 pub fn run_argv_hosted_for_tests(
-    store: &Store,
+    store: &Mutex<Store>,
     host: &ProcessHost,
     run_id: Uuid,
     argv: Vec<String>,

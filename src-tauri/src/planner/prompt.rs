@@ -30,6 +30,10 @@ PLAN DESIGN
 - Every phase must be independently understandable in a fresh Cursor chat.
 - Every phase must identify dependencies, project IDs, read roots, exclusive write
   roots, model tier, acceptance criteria, rollback point, artifacts, and tests.
+- Copy writeRoots / readRoots exactly from the approved roots in context. For flat
+  notes→product runs, the product write root is the output folder itself (plan
+  files live in that root's `.tiamat/`); do not invent nested `projects/<slug>`
+  paths or a second `.tiamat` tree.
 - Require unit, integration, and end-to-end tests when applicable. If a test type is
   genuinely inapplicable, state why and provide the nearest useful verification.
 - Allow parallel phases only when dependencies and write roots prove it safe.
@@ -49,6 +53,11 @@ OUTPUT
   or raw Markdown). That Markdown is the canonical human plan.
 - Do not return a ProjectPlan JSON object as the chat answer. Tiamat compiles
   .tiamat/plan.json from your structured Markdown.
+- Prefer pasting the full structured document as the assistant answer.
+- If plan mode invokes CreatePlan, the tool args.plan field MUST contain the
+  complete structured MASTER-PLAN.md (same contract below). Tiamat reads
+  createPlanToolCall.args.plan from the stream. Do not leave only a short
+  summary in chat text.
 - Use stable phase IDs and an acyclic dependency graph.
 - Do not leave placeholders, TODO questions, or vague acceptance criteria.
 - Include the structured sections below exactly so Tiamat can compile scheduling
@@ -71,11 +80,11 @@ STRUCTURED MARKDOWN CONTRACT
 Write any depth/narrative you need, then include these machine fields as bullets:
 
 - **phaseId**: P01
-- **objective**: <objective; mention inapplicable test layers here when empty>
+- **objective**: <objective>
 - **dependencies**: none
 - **projectIds**: <comma-separated managed project ids>
-- **readRoots**: <path> | <path>
-- **writeRoots**: <path>
+- **readRoots**: <exact approved managed path from context>
+- **writeRoots**: <exact approved managed path from context>
 - **modelTier**: composer | grok-low | grok-medium | grok-high
 - **estimatedMinutes**: <integer>
 - **rollbackCheckpoint**: <checkpoint name>
@@ -88,6 +97,8 @@ Write any depth/narrative you need, then include these machine fields as bullets
 ### Unit tests
 - `UT-P01-01` — command: `npm` `test` — cwd: `.` — timeout: 120 — covers: AC-P01-01
   OR `- (none) — reason: <why unit tests are inapplicable>`
+  (Tiamat compiles `(none) — reason:` into the phase; you do not also need the word
+  "inapplicable" in the objective when you use that form.)
 
 ### Integration tests
 - (none) — reason: <why>   OR a test bullet like Unit tests
@@ -113,6 +124,13 @@ pub fn repair_prompt(issues: &[String]) -> String {
     for (idx, issue) in issues.iter().enumerate() {
         body.push_str(&format!("{}. {}\n", idx + 1, issue));
     }
+    body.push_str(
+        "\nReminder: keep the structured Markdown contract (## Phase / ### Unit tests / \
+         ### Integration tests / ### E2E tests / ## Final gates). Empty test layers must use \
+         `- (none) — reason: <why>` (Tiamat compiles that reason). writeRoots and readRoots \
+         must be exact approved managed roots from the bounded intake context — do not invent \
+         paths.\n",
+    );
     body
 }
 
@@ -136,5 +154,16 @@ mod tests {
         assert!(text.contains("MASTER-PLAN.md"));
         assert!(text.contains("Do not return ProjectPlan JSON"));
         assert!(text.contains("missing phase markers"));
+        assert!(text.contains("(none) — reason:"));
+        assert!(text.contains("approved managed roots"));
+    }
+
+    #[test]
+    fn system_prompt_documents_none_reason_compile() {
+        assert!(ARCHITECT_SYSTEM_PROMPT.contains("(none) — reason:"));
+        assert!(ARCHITECT_SYSTEM_PROMPT.contains("Tiamat compiles"));
+        assert!(ARCHITECT_SYSTEM_PROMPT.contains("exact approved managed path"));
+        assert!(ARCHITECT_SYSTEM_PROMPT.contains("CreatePlan"));
+        assert!(ARCHITECT_SYSTEM_PROMPT.contains("createPlanToolCall.args.plan"));
     }
 }

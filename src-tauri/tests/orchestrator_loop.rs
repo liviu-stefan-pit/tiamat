@@ -94,11 +94,14 @@ fn models() -> Vec<CursorModelInfo> {
 fn tick_execute_phase_complete_attempt_passes() {
     let _lock = lock_fixtures();
     let dir = tempdir().unwrap();
-    let store = Store::open_in_memory(dir.path()).unwrap();
+    let store_mutex = Mutex::new(Store::open_in_memory(dir.path()).unwrap());
     let run_id = Uuid::new_v4();
-    store
-        .create_run(run_id, "orchestrator loop", "executing")
-        .unwrap();
+    {
+        let store = store_mutex.lock().unwrap();
+        store
+            .create_run(run_id, "orchestrator loop", "executing")
+            .unwrap();
+    }
 
     let source = repo_root().join("fixtures/intake/executor-app");
     let report = intake::run_preflight(&[source.display().to_string()], IntakeLimits::default())
@@ -194,12 +197,14 @@ fn tick_execute_phase_complete_attempt_passes() {
         max_concurrent: 1,
         ..SchedulerConfig::default()
     };
-    load_plan_into_scheduler(&store, &plan, &config).unwrap();
+    load_plan_into_scheduler(&store_mutex.lock().unwrap(), &plan, &config).unwrap();
 
-    let started = tick(&store, run_id, &models(), &config, &[]).unwrap();
+    let started = tick(&store_mutex.lock().unwrap(), run_id, &models(), &config, &[]).unwrap();
     assert_eq!(started.started, vec!["P01".to_string()]);
 
-    let attempt = store
+    let attempt = store_mutex
+        .lock()
+        .unwrap()
         .list_attempts_for_phase(run_id, "P01")
         .unwrap()
         .into_iter()
@@ -227,7 +232,7 @@ fn tick_execute_phase_complete_attempt_passes() {
         establish_baseline: true,
         flaky_retry: true,
         host: Some(HostedSpawnContext {
-            store: &store,
+            store: &store_mutex,
             host: &process_host,
         }),
     })
@@ -236,7 +241,7 @@ fn tick_execute_phase_complete_attempt_passes() {
     assert!(outcome.ok, "{}", outcome.message);
 
     complete_attempt(
-        &store,
+        &store_mutex.lock().unwrap(),
         attempt.attempt_id,
         AttemptTerminalResult::Succeeded,
         None,
@@ -244,7 +249,7 @@ fn tick_execute_phase_complete_attempt_passes() {
     )
     .unwrap();
 
-    let snap = snapshot(&store, run_id).unwrap();
+    let snap = snapshot(&store_mutex.lock().unwrap(), run_id).unwrap();
     let phase = snap
         .phases
         .iter()
@@ -253,6 +258,6 @@ fn tick_execute_phase_complete_attempt_passes() {
     assert_eq!(phase.status, PhaseRuntimeStatus::Passed);
 
     // Dependents would unblock on the next tick; with a single phase the run is idle.
-    let after = tick(&store, run_id, &models(), &config, &[]).unwrap();
+    let after = tick(&store_mutex.lock().unwrap(), run_id, &models(), &config, &[]).unwrap();
     assert!(after.started.is_empty());
 }
