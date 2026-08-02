@@ -35,7 +35,7 @@ jobs:
           workspaces: "./src-tauri -> target"
 
       - name: Linux WebKit dependencies
-        if: runner.os == "Linux"
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           # Ubuntu 24.04: Ayatana only (libappindicator3-dev conflicts).
