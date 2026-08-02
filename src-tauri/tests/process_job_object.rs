@@ -13,10 +13,29 @@ use tiamat_lib::process::{
 use uuid::Uuid;
 
 fn fake_cli() -> PathBuf {
-    tiamat_contracts::repo_root()
+    let root = tiamat_contracts::repo_root()
         .join("fixtures")
-        .join("cursor-cli")
-        .join("fake-agent.cmd")
+        .join("cursor-cli");
+    #[cfg(windows)]
+    {
+        root.join("fake-agent.cmd")
+    }
+    #[cfg(not(windows))]
+    {
+        root.join("fake-agent.mjs")
+    }
+}
+
+fn fake_cli_argv() -> Vec<String> {
+    let cli = fake_cli();
+    #[cfg(windows)]
+    {
+        vec![cli.to_string_lossy().to_string()]
+    }
+    #[cfg(not(windows))]
+    {
+        vec!["node".into(), cli.to_string_lossy().to_string()]
+    }
 }
 
 fn run_mode(mode: &str, watchdog: WatchdogConfig) -> tiamat_lib::process::HostedProcessOutcome {
@@ -27,7 +46,7 @@ fn run_mode(mode: &str, watchdog: WatchdogConfig) -> tiamat_lib::process::Hosted
         .create_run(run_id, "P07 process tree", "executing")
         .unwrap();
     let host = ProcessHost::new();
-    let argv = vec![fake_cli().to_string_lossy().to_string()];
+    let argv = fake_cli_argv();
     let env = vec![("TIAMAT_FAKE_CLI_MODE".into(), mode.into())];
     run_argv_hosted_for_tests(&store, &host, run_id, argv, env, watchdog).expect("hosted run")
 }
@@ -151,12 +170,8 @@ fn resume_success_same_chat_after_timeout_metadata() {
     let run_id = Uuid::new_v4();
     store.create_run(run_id, "resume", "executing").unwrap();
     let host = ProcessHost::new();
-    let argv = vec![
-        fake_cli().to_string_lossy().to_string(),
-        "--resume".into(),
-        chat.clone(),
-        "--print".into(),
-    ];
+    let mut argv = fake_cli_argv();
+    argv.extend(["--resume".into(), chat.clone(), "--print".into()]);
     let outcome = host
         .run_hosted(
             &store,
@@ -196,7 +211,7 @@ fn registry_empty_after_cleanup_and_terminal_gate() {
         &store,
         &host,
         run_id,
-        vec![fake_cli().to_string_lossy().to_string()],
+        fake_cli_argv(),
         vec![("TIAMAT_FAKE_CLI_MODE".into(), "silent_hang".into())],
         WatchdogConfig {
             warn_after_ms: 30,
@@ -235,7 +250,7 @@ fn cancel_path_leaves_zero_survivors() {
             &store,
             &host_b,
             run_id,
-            vec![fake_cli().to_string_lossy().to_string()],
+            fake_cli_argv(),
             vec![("TIAMAT_FAKE_CLI_MODE".into(), "silent_hang".into())],
             WatchdogConfig {
                 warn_after_ms: 5_000,
@@ -285,6 +300,15 @@ fn hosted_spawn_defaults_to_attribute_list_association() {
     let run_id = Uuid::new_v4();
     store.create_run(run_id, "assoc", "executing").unwrap();
     let host = ProcessHost::new();
+    #[cfg(windows)]
+    let argv = vec![
+        "C:\\Windows\\System32\\cmd.exe".into(),
+        "/c".into(),
+        "echo".into(),
+        "hosted".into(),
+    ];
+    #[cfg(not(windows))]
+    let argv = vec!["/bin/echo".into(), "hosted".into()];
     let outcome = host
         .run_hosted(
             &store,
@@ -292,12 +316,7 @@ fn hosted_spawn_defaults_to_attribute_list_association() {
                 run_id,
                 phase_id: Some("P13".into()),
                 attempt_id: None,
-                argv: vec![
-                    "C:\\Windows\\System32\\cmd.exe".into(),
-                    "/c".into(),
-                    "echo".into(),
-                    "hosted".into(),
-                ],
+                argv,
                 stdin: Some(String::new()),
                 workspace: None,
                 env: vec![],
@@ -343,14 +362,14 @@ fn hosted_cmd_wrapper_runs_architect_plan_mode() {
     let host = ProcessHost::new();
     let workspace = dir.path().join("ws");
     std::fs::create_dir_all(&workspace).unwrap();
-    let argv = vec![
-        fake_cli().to_string_lossy().to_string(),
+    let mut argv = fake_cli_argv();
+    argv.extend([
         "--print".into(),
         "--mode".into(),
         "plan".into(),
         "--output-format".into(),
         "stream-json".into(),
-    ];
+    ]);
     let outcome = host
         .run_hosted(
             &store,
@@ -377,6 +396,24 @@ fn hosted_cmd_wrapper_runs_architect_plan_mode() {
     assert_eq!(outcome.exit_code, Some(0), "stderr={}", outcome.stderr);
     assert!(!outcome.truncated);
     assert!(outcome.stdout.contains("schemaVersion") || outcome.stdout.contains("assistant"));
+    assert_zero_survivors(&outcome);
+}
+
+#[cfg(unix)]
+#[test]
+fn unix_process_group_kills_child_tree() {
+    // Linux/macOS containment is process-group based (weaker than Job Objects:
+    // descendants that call setsid() escape). child_tree must still be reaped.
+    let outcome = run_mode(
+        "child_tree",
+        WatchdogConfig {
+            warn_after_ms: 50,
+            graceful_after_ms: 150,
+            force_grace_ms: 50,
+            drain_timeout_ms: 800,
+        },
+    );
+    assert!(outcome.timed_out || outcome.killed);
     assert_zero_survivors(&outcome);
 }
 
@@ -437,7 +474,9 @@ fn ps1_dash_trap_fails_with_lone_dash_but_prepare_strips_it() {
     let (prepared, _) = prepare_hosted_cursor_argv(&raw);
     assert!(!prepared.iter().any(|a| a == "-"));
     let run_id2 = Uuid::new_v4();
-    store.create_run(run_id2, "dash-trap-ok", "planning").unwrap();
+    store
+        .create_run(run_id2, "dash-trap-ok", "planning")
+        .unwrap();
     let good = run_capture_hosted(
         &store,
         &host,

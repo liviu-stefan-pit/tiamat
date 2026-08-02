@@ -1,8 +1,10 @@
 //! Windows Job Object helpers: kill-on-close, breakaway disabled, active-process limit.
 
+#[cfg_attr(not(windows), allow(unused_imports))]
 use super::error::{ProcessError, ProcessResult};
 
 /// Default active-process ceiling for hosted work (defense-in-depth).
+#[cfg_attr(not(windows), allow(dead_code))]
 pub const DEFAULT_ACTIVE_PROCESS_LIMIT: u32 = 64;
 
 #[cfg(windows)]
@@ -199,38 +201,125 @@ mod win {
 #[cfg(windows)]
 pub use win::*;
 
-#[cfg(not(windows))]
-mod stub {
-    use super::{ProcessError, ProcessResult};
+#[cfg(unix)]
+mod nix {
+    use super::ProcessResult;
+    use std::sync::atomic::{AtomicI32, Ordering};
 
+    /// Unix analogue of a Windows Job Object: a process group.
+    ///
+    /// The child is made a group leader at spawn (`setpgid(0, 0)`), so its whole
+    /// descendant tree shares the group id and can be signalled in one call. This is
+    /// weaker than a Job Object -- a descendant that calls `setsid()` escapes the
+    /// group -- but it covers ordinary shell/node/agent process trees.
     #[derive(Debug)]
-    pub struct JobObject;
+    pub struct JobObject {
+        pgid: AtomicI32,
+        name: Option<String>,
+    }
 
     impl JobObject {
-        pub fn create_kill_on_close(_name: Option<&str>) -> ProcessResult<Self> {
-            Err(ProcessError::Unsupported(
-                "Job Objects require Windows".into(),
-            ))
+        pub fn create_kill_on_close(name: Option<&str>) -> ProcessResult<Self> {
+            Ok(Self {
+                pgid: AtomicI32::new(0),
+                name: name.map(str::to_string),
+            })
         }
+
+        #[allow(dead_code)]
+        pub fn create_configured(
+            name: Option<&str>,
+            _active_process_limit: u32,
+        ) -> ProcessResult<Self> {
+            Self::create_kill_on_close(name)
+        }
+
         pub fn name(&self) -> Option<&str> {
-            None
+            self.name.as_deref()
         }
-        pub fn terminate(&self, _exit_code: u32) -> ProcessResult<()> {
-            Err(ProcessError::Unsupported(
-                "Job Objects require Windows".into(),
-            ))
+
+        /// Bind this job to the group led by `pid`, once the child has been spawned.
+        pub fn attach_pgid(&self, pid: u32) {
+            self.pgid.store(pid as i32, Ordering::SeqCst);
         }
+
+        pub fn pgid(&self) -> i32 {
+            self.pgid.load(Ordering::SeqCst)
+        }
+
+        /// Signal the whole group. SIGTERM first; `exit_code != 0` escalates to SIGKILL.
+        pub fn terminate(&self, exit_code: u32) -> ProcessResult<()> {
+            let pgid = self.pgid();
+            if pgid <= 0 {
+                return Ok(());
+            }
+            let signal = if exit_code == 0 {
+                libc::SIGTERM
+            } else {
+                libc::SIGKILL
+            };
+            // SAFETY: killpg on a group we created; a negative/zero pgid is rejected above.
+            unsafe {
+                libc::killpg(pgid, signal);
+            }
+            Ok(())
+        }
+
+        /// Live members of the process group, counted from /proc.
         pub fn active_process_count(&self) -> ProcessResult<u32> {
-            Ok(0)
+            Ok(self.list_process_ids()?.len() as u32)
         }
+
         pub fn list_process_ids(&self) -> ProcessResult<Vec<u32>> {
-            Ok(vec![])
+            let pgid = self.pgid();
+            if pgid <= 0 {
+                return Ok(vec![]);
+            }
+            let mut out = Vec::new();
+            let Ok(entries) = std::fs::read_dir("/proc") else {
+                return Ok(out);
+            };
+            for entry in entries.flatten() {
+                let Ok(name) = entry.file_name().into_string() else {
+                    continue;
+                };
+                let Ok(pid) = name.parse::<i32>() else {
+                    continue;
+                };
+                // SAFETY: getpgid is a pure query; ESRCH for dead pids is handled by the check.
+                let found = unsafe { libc::getpgid(pid) };
+                if found == pgid {
+                    // A zombie still has a group but holds no resources; don't count it.
+                    if !is_zombie(pid) {
+                        out.push(pid as u32);
+                    }
+                }
+            }
+            Ok(out)
+        }
+    }
+
+    fn is_zombie(pid: i32) -> bool {
+        let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+            return true;
+        };
+        // Field 3 is the state char; the comm field before it may contain spaces.
+        stat.rsplit_once(") ")
+            .and_then(|(_, rest)| rest.split_whitespace().next())
+            .map(|state| state == "Z")
+            .unwrap_or(true)
+    }
+
+    impl Drop for JobObject {
+        fn drop(&mut self) {
+            // Kill-on-close: mirrors JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE.
+            let _ = self.terminate(1);
         }
     }
 }
 
-#[cfg(not(windows))]
-pub use stub::*;
+#[cfg(unix)]
+pub use nix::*;
 
 #[cfg(all(test, windows))]
 mod tests {

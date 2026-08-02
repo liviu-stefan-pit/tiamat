@@ -3,14 +3,23 @@
 
 use super::error::{ProcessError, ProcessResult};
 use super::job::JobObject;
-use super::windows_cmd::{normalize_windows_argv, quote_windows_arg};
-use std::ffi::OsStr;
-use std::fs::File;
-use std::io::{self, Write};
-use std::os::windows::ffi::OsStrExt;
-use std::os::windows::io::{FromRawHandle, RawHandle};
-use std::os::windows::process::ExitStatusExt;
+use std::io;
 use std::process::{Child, ExitStatus};
+
+#[cfg(windows)]
+use super::windows_cmd::{normalize_windows_argv, quote_windows_arg};
+#[cfg(windows)]
+use std::ffi::OsStr;
+#[cfg(windows)]
+use std::fs::File;
+#[cfg(windows)]
+use std::io::Write;
+#[cfg(windows)]
+use std::os::windows::ffi::OsStrExt;
+#[cfg(windows)]
+use std::os::windows::io::{FromRawHandle, RawHandle};
+#[cfg(windows)]
+use std::os::windows::process::ExitStatusExt;
 
 #[derive(Debug)]
 pub struct SpawnedInJob {
@@ -38,6 +47,7 @@ pub struct HostedChild {
 
 enum HostedChildInner {
     Std(Child),
+    #[cfg(windows)]
     Attr {
         process: isize,
         stdout: Option<File>,
@@ -54,6 +64,7 @@ impl HostedChild {
                 .stdout
                 .take()
                 .map(|s| Box::new(s) as Box<dyn io::Read + Send>),
+            #[cfg(windows)]
             HostedChildInner::Attr { stdout, .. } => stdout
                 .take()
                 .map(|f| Box::new(f) as Box<dyn io::Read + Send>),
@@ -66,6 +77,7 @@ impl HostedChild {
                 .stderr
                 .take()
                 .map(|s| Box::new(s) as Box<dyn io::Read + Send>),
+            #[cfg(windows)]
             HostedChildInner::Attr { stderr, .. } => stderr
                 .take()
                 .map(|f| Box::new(f) as Box<dyn io::Read + Send>),
@@ -75,6 +87,7 @@ impl HostedChild {
     pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
         match &mut self.inner {
             HostedChildInner::Std(c) => c.try_wait(),
+            #[cfg(windows)]
             HostedChildInner::Attr { process, .. } => unsafe {
                 use windows::Win32::Foundation::{HANDLE, STILL_ACTIVE};
                 use windows::Win32::System::Threading::GetExitCodeProcess;
@@ -94,6 +107,7 @@ impl HostedChild {
     pub fn wait(&mut self) -> io::Result<ExitStatus> {
         match &mut self.inner {
             HostedChildInner::Std(c) => c.wait(),
+            #[cfg(windows)]
             HostedChildInner::Attr { process, .. } => unsafe {
                 use windows::Win32::Foundation::HANDLE;
                 use windows::Win32::System::Threading::{
@@ -111,6 +125,7 @@ impl HostedChild {
     pub fn kill(&mut self) -> io::Result<()> {
         match &mut self.inner {
             HostedChildInner::Std(c) => c.kill(),
+            #[cfg(windows)]
             HostedChildInner::Attr { process, .. } => unsafe {
                 use windows::Win32::Foundation::HANDLE;
                 use windows::Win32::System::Threading::TerminateProcess;
@@ -653,7 +668,82 @@ pub fn attribute_list_api_available() -> bool {
     prove_attribute_list_association().is_ok()
 }
 
-#[cfg(not(windows))]
+/// Hosted spawn on Unix: the child leads its own process group, so the whole
+/// descendant tree can be signalled together (see `job::JobObject` for the
+/// Job Object equivalence and its limits).
+#[cfg(unix)]
+pub fn spawn_hosted(
+    argv: &[String],
+    stdin_data: Option<&str>,
+    env: &[(String, String)],
+    workspace: Option<&str>,
+) -> ProcessResult<(SpawnedInJob, HostedChild)> {
+    use std::io::Write;
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+
+    if argv.is_empty() {
+        return Err(ProcessError::Spawn("argv must not be empty".into()));
+    }
+
+    let job = JobObject::create_kill_on_close(None)?;
+    let mut cmd = Command::new(&argv[0]);
+    cmd.args(&argv[1..])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (key, value) in env {
+        cmd.env(key, value);
+    }
+    if let Some(dir) = workspace {
+        cmd.current_dir(dir);
+    }
+    // Group leader, so killpg reaches every descendant that has not called setsid().
+    cmd.process_group(0);
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| ProcessError::Spawn(format!("spawn {}: {e}", argv[0])))?;
+    let pid = child.id();
+    job.attach_pgid(pid);
+
+    if let Some(data) = stdin_data {
+        if let Some(mut handle) = child.stdin.take() {
+            let _ = handle.write_all(data.as_bytes());
+        }
+    } else {
+        drop(child.stdin.take());
+    }
+
+    let spawned = SpawnedInJob {
+        pid,
+        process_handle: 0,
+        job,
+        association: AssociationMethod::ProcThreadAttributeJobList,
+        executable_identity: argv[0].clone(),
+        creation_time_100ns: super::identity::query_start_time(pid).unwrap_or(0),
+        degraded_association: false,
+    };
+    Ok((
+        spawned,
+        HostedChild {
+            inner: HostedChildInner::Std(child),
+        },
+    ))
+}
+
+/// Process-group association needs no probing; it is a plain POSIX guarantee.
+#[cfg(unix)]
+pub fn prove_attribute_list_association() -> ProcessResult<AssociationMethod> {
+    Ok(AssociationMethod::ProcThreadAttributeJobList)
+}
+
+#[cfg(unix)]
+pub fn attribute_list_api_available() -> bool {
+    true
+}
+
+#[cfg(not(any(windows, unix)))]
 pub fn spawn_hosted(
     _argv: &[String],
     _stdin_data: Option<&str>,
@@ -661,24 +751,26 @@ pub fn spawn_hosted(
     _workspace: Option<&str>,
 ) -> ProcessResult<(SpawnedInJob, HostedChild)> {
     Err(ProcessError::Unsupported(
-        "hosted spawn requires Windows".into(),
+        "hosted spawn requires Windows or a Unix platform".into(),
     ))
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, unix)))]
 pub fn prove_attribute_list_association() -> ProcessResult<AssociationMethod> {
-    Err(ProcessError::Unsupported("Windows only".into()))
+    Err(ProcessError::Unsupported("unsupported platform".into()))
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, unix)))]
 pub fn attribute_list_api_available() -> bool {
     false
 }
 
 #[cfg(test)]
 mod tests {
+    #[cfg_attr(not(windows), allow(unused_imports))]
     use super::*;
 
+    #[cfg(windows)]
     #[test]
     fn quote_handles_spaces() {
         assert_eq!(quote_windows_arg("a b"), "\"a b\"");
@@ -695,8 +787,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn join_cmd_c_payload_is_not_double_quoted() {
-        let payload =
-            r#"C:\tools\agent.cmd --print --workspace "C:\My Project\notes" --mode plan"#;
+        let payload = r#"C:\tools\agent.cmd --print --workspace "C:\My Project\notes" --mode plan"#;
         let line = join_windows_command_line(&[
             "cmd.exe".into(),
             "/d".into(),

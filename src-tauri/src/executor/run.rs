@@ -147,7 +147,9 @@ pub fn execute_phase(req: ExecutePhaseRequest<'_>) -> ExecutorResult<PhaseExecut
     env.insert("TIAMAT_FAKE_PHASE_ID".into(), phase.phase_id.clone());
 
     let before_snapshot = snapshot_paths(&managed_run_root, 6);
-    let timeout = req.timeout_ms.unwrap_or(60_000);
+    let timeout = req
+        .timeout_ms
+        .unwrap_or_else(|| crate::cursor::TimeoutSettings::from_env().phase_timeout_ms);
     let write_root_str = write_root.display().to_string();
     let capture = run_phase_agent_hosted(
         req.host.as_ref(),
@@ -703,9 +705,7 @@ fn run_phase_agent_hosted(
     let request = SpawnRequest {
         run_id,
         phase_id: phase_id.map(str::to_string),
-        // Process registry FK references attempts(attempt_id); callers may not have
-        // inserted an attempts row yet. Carry attempt via phase_id / events instead.
-        attempt_id: None,
+        attempt_id,
         argv: argv.to_vec(),
         stdin: stdin.map(str::to_string),
         workspace: workspace.map(str::to_string),
@@ -715,10 +715,10 @@ fn run_phase_agent_hosted(
         next_model_on_timeout: None,
         next_tier_on_timeout: None,
     };
-    let _ = attempt_id;
     match host {
         Some(ctx) => {
-            // Ensure run row exists for FK/event paths.
+            // The scheduler inserts the attempt row before we execute, so the FK is valid.
+            // If create_run races with an existing row, ignore the duplicate.
             let _ = ctx.store.create_run(run_id, "phase-exec", "executing");
             run_capture_hosted(ctx.store, ctx.host, request).map_err(|e| e.to_string())
         }

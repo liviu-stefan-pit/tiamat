@@ -78,12 +78,29 @@ fn which_on_path(name: &str, path_value: &std::ffi::OsStr) -> Option<String> {
     for dir in env::split_paths(path_value) {
         for ext in extensions {
             let candidate = dir.join(format!("{name}{ext}"));
-            if candidate.is_file() {
+            if candidate.is_file() && is_executable(&candidate) {
                 return Some(candidate.to_string_lossy().to_string());
             }
         }
     }
     None
+}
+
+/// On Unix a PATH hit is only usable if the exec bit is set; Windows infers this
+/// from the extension, which `which_on_path` already filters on.
+fn is_executable(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        path.metadata()
+            .map(|m| m.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        true
+    }
 }
 
 fn known_install_paths(environ: &HashMap<String, String>) -> Vec<String> {
@@ -105,6 +122,13 @@ fn known_install_paths(environ: &HashMap<String, String>) -> Vec<String> {
         (
             "USERPROFILE",
             PathBuf::from(".local").join("bin").join("agent"),
+        ),
+        (
+            "HOME",
+            PathBuf::from(".local")
+                .join("share")
+                .join("cursor-agent")
+                .join("cursor-agent"),
         ),
     ];
 
@@ -128,10 +152,7 @@ fn known_install_paths(environ: &HashMap<String, String>) -> Vec<String> {
 /// ([PowerShell#10510](https://github.com/PowerShell/PowerShell/issues/10510)).
 /// Stdin is the prompt channel; `-` must never appear as a placeholder.
 pub fn strip_lone_dash_argv(argv: &[String]) -> Vec<String> {
-    argv.iter()
-        .filter(|a| a.as_str() != "-")
-        .cloned()
-        .collect()
+    argv.iter().filter(|a| a.as_str() != "-").cloned().collect()
 }
 
 /// Expand a Cursor install launcher (`.cmd`/`.ps1` under `cursor-agent`) to
@@ -249,7 +270,14 @@ fn parse_cursor_version_sort_key(name: &str) -> Option<i64> {
         .get(6)
         .and_then(|m| m.as_str().parse().ok())
         .unwrap_or(0);
-    Some(year * 10_000_000_000 + month * 100_000_000 + day * 1_000_000 + hour * 10_000 + minute * 100 + second)
+    Some(
+        year * 10_000_000_000
+            + month * 100_000_000
+            + day * 1_000_000
+            + hour * 10_000
+            + minute * 100
+            + second,
+    )
 }
 
 #[cfg(test)]
@@ -342,9 +370,16 @@ mod tests {
 
     #[test]
     fn prepare_hosted_leaves_non_launcher_argv() {
-        let argv = vec!["C:\\tools\\fake-agent.cmd".into(), "--print".into(), "-".into()];
+        let argv = vec![
+            "C:\\tools\\fake-agent.cmd".into(),
+            "--print".into(),
+            "-".into(),
+        ];
         let (out, env) = prepare_hosted_cursor_argv(&argv);
-        assert_eq!(out, vec!["C:\\tools\\fake-agent.cmd".to_string(), "--print".into()]);
+        assert_eq!(
+            out,
+            vec!["C:\\tools\\fake-agent.cmd".to_string(), "--print".into()]
+        );
         assert!(env.is_empty());
     }
 

@@ -65,6 +65,14 @@ impl Store {
             .ok_or_else(|| DbError::RunNotFound(run_id.to_string()))
     }
 
+    /// Get the run, creating it with the given title/status if it does not exist yet.
+    pub fn ensure_run(&self, run_id: Uuid, title: &str, status: &str) -> DbResult<RunRecord> {
+        match self.get_run(run_id)? {
+            Some(existing) => Ok(existing),
+            None => self.create_run(run_id, title, status),
+        }
+    }
+
     pub fn get_run(&self, run_id: Uuid) -> DbResult<Option<RunRecord>> {
         self.conn
             .query_row(
@@ -109,6 +117,19 @@ impl Store {
             out.push(row?);
         }
         Ok(out)
+    }
+
+    /// Atomically set a run's status without appending an event.
+    pub fn set_run_status(&self, run_id: Uuid, status: &str) -> DbResult<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let updated = self.conn.execute(
+            "UPDATE runs SET status = ?1, updated_at_utc = ?2 WHERE run_id = ?3",
+            params![status, now, run_id.to_string()],
+        )?;
+        if updated == 0 {
+            return Err(DbError::RunNotFound(run_id.to_string()));
+        }
+        Ok(())
     }
 
     /// Atomically update run status (optional) and append the next monotonic event.

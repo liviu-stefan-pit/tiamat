@@ -2,41 +2,34 @@
 
 ## Targets
 
-Configured in `src-tauri/tauri.conf.json`: NSIS + MSI, product version `0.1.0`, identifier `com.tiamat.desktop`.
+Configured in `src-tauri/tauri.conf.json` with `"targets": "all"` (platform-native bundles). Product version `0.1.0`, identifier `com.tiamat.desktop`.
 
-```powershell
+```bash
 npm run package
 ```
 
-Stages installers and SHA-256 sums under `artifacts/packages/` via `scripts/package.ps1`. Signing disposition defaults to `unsigned-dev`.
+Runs `scripts/package.mjs`: `tauri build`, then stages installers and SHA-256 sums under `artifacts/packages/`. Signing disposition defaults to `unsigned-dev`.
+
+Windows: NSIS + MSI. Linux: AppImage / deb (and rpm when enabled by the host toolchain).
+
+## GitHub Releases
+
+Pushing a `v*` tag runs `.github/workflows/release.yml` on `windows-latest` and `ubuntu-24.04`, attaching both platforms' artifacts to one GitHub Release via `tauri-apps/tauri-action`.
+
+Bump versions with:
+
+```bash
+npm run version -- 0.2.0
+```
 
 ## Install / upgrade / uninstall policy
 
 Rust module `src-tauri/src/packaging`:
 
-- Upgrade preserves DB, settings, workspaces under `%APPDATA%\com.tiamat.desktop\` (app data).
-- **Retention policy:** unmanaged deletion of unpromoted managed workspaces is forbidden. Managed runs live under `%APPDATA%\com.tiamat.desktop\tiamat\workspaces\` (same root `materialize_workspace` uses). `plan_uninstall_retention` lists paths that must be kept.
-- **Installer hooks (honest status):** unsigned-dev NSIS/MSI builds do **not** yet ship fully wired custom actions that exclude `tiamat\workspaces\` from AppData wipe. Product policy and the VM matrix fixture use the real workspaces path; `install-matrix-result.json` records `unpromotedRetained` / `installerRetainHooksWired` without planting KEEP under an unrelated `LOCALAPPDATA\tiamat-managed-runs` path. Do not claim installer-level retention is proven until hooks are wired and the matrix reports `installerRetainHooksWired: true`.
-- Cleanup proof helpers write `artifacts/cleanup-proof/`.
+- Upgrade preserves DB and settings.
+- **Retention policy:** unmanaged deletion of unpromoted managed workspaces is forbidden. User-chosen output directories hold `run-*` trees; promote or export before wiping.
+- Windows VM matrix scripts remain under `scripts/vm/` (PowerShell).
 
-## Disposable VM matrix
+## Disposable VM matrix (Windows)
 
-Do **not** run full install matrix against a contributor profile. Use a snapshotted disposable Windows VM:
-
-```powershell
-# On the VM after restoring tiamat-p11-base:
-powershell -ExecutionPolicy Bypass -File scripts\vm\run-install-matrix.ps1 `
-  -PackageDir \\host\share\artifacts\packages `
-  -ArtifactOut C:\tiamat-artifacts
-```
-
-Details: `scripts/vm/README.md`.
-
-## Local subset without MSI
-
-```powershell
-npm run test:packaged
-npm run test:cleanup-proof
-```
-
-Uses isolated APPDATA redirect (`-IsolatedProfile`).
+Do **not** run full install matrix against a contributor profile. Use a snapshotted disposable Windows VM — see `scripts/vm/README.md`.

@@ -94,7 +94,7 @@ Tauri is selected because it preserves the clean React UI style of Mitos while g
 
 Runtime model IDs must come from `agent --list-models`. The following are preferred IDs as of this plan:
 
-- Initial project architect only: `gpt-5.6-sol-high`.
+- Initial project architect only: `cursor-grok-4.5-high` (Cursor Grok High).
 - Tiny/mechanical implementation: `composer-2.5`.
 - Small bounded implementation: `cursor-grok-4.5-low`.
 - Normal implementation/debugging: `cursor-grok-4.5-medium`.
@@ -150,16 +150,15 @@ Reuse concepts, not a runtime dependency:
 
 ### 6.1 Main screen
 
-The main window has:
+The main window is a strict three-pane shell:
 
-- Header: Tiamat title, Cursor status, current workspace, settings.
-- Intake panel: drag/drop zone, file picker, folder picker, recent inputs.
-- Preflight card: detected projects, repository state, languages, test commands, risk warnings, estimated phase range, and trust confirmation.
-- Primary action: **Start implementation**.
-- Center: read-only phase DAG with zoom, pan, fit, minimap, status colors, and selected-node detail.
-- Side/bottom panel: structured live logger with filters for run, project, phase, attempt, agent, test, stdout, stderr, and system.
-- Run controls: pause scheduling, resume, cancel run, retry failed phase, and open output.
-- Persistent emergency-stop hint: `Ctrl+Shift+F12`.
+- Header: Tiamat title and short tagline.
+- **Input:** drag/drop, file/folder pickers, path paste, preflight summary, and a single trust acknowledgment.
+- **Output:** folder picker / path for the build root (`managed_parent`; each run creates `run-{uuid}/` beneath it).
+- **Run bar:** **Run** / **Stop** (orchestrator start/cancel).
+- **Log:** structured live logger with level filter, search, follow, and export.
+
+Graph canvas, settings panel, reports, workspace, recovery, and timeline panels are not part of the product UI; the Rust core still owns preflight, DAG scheduling, verification, recovery, and abort.
 
 ### 6.2 Graph behavior
 
@@ -1147,7 +1146,7 @@ Acceptance:
 
 Evidence (2026-08-02):
 
-- Rust `planner` module: exact §12.2 system prompt, bounded intake context, SOL (`gpt-5.6-sol-high`) with Grok High (`cursor-grok-4.5-high`) degraded fallback, plan-mode-only invoke (`force`/`auto-review` forbidden), stream JSON extract, schema+semantic validation (DAG/roots/tiers/prompts/tests), deterministic Markdown renderer + hash check, atomic `.tiamat/plan.json`+`MASTER-PLAN.md`, control-repo checkpoint, graph projection
+- Rust `planner` module: exact §12.2 system prompt, bounded intake context, Cursor Grok High (`cursor-grok-4.5-high`) architect, plan-mode-only invoke (`force`/`auto-review` forbidden), stream JSON extract, schema+semantic validation (DAG/roots/tiers/prompts/tests), deterministic Markdown renderer + hash check, atomic `.tiamat/plan.json`+`MASTER-PLAN.md`, control-repo checkpoint, graph projection
 - Fake CLI architect modes: `architect_valid`, `architect_invalid`, `architect_repairable`, `architect_no_sol` under `fixtures/cursor-cli/`; rough-spec fixture `fixtures/intake/rough-spec/`
 - Tauri commands: `run_architect_pipeline`, `get_project_plan`, `get_graph_projection`, `get_architect_result`; Start materializes workspace then runs architect and projects phases into the graph
 - Proven cannot-implement: architect argv always includes `--mode plan` and never `--force`/`--auto-review`; fake CLI rejects implementation approval flags (exit 12)
@@ -1162,8 +1161,9 @@ Copy-paste phase prompt:
 ```text
 Implement Tiamat phase P05 only. Read C:\prod\tiamat\MASTER-PLAN.md completely,
 inspect git status/prior evidence, and implement the initial architect pipeline,
-using gpt-5.6-sol-high only for that role and runtime availability fallback to
-Grok High. Embed the exact architect policy from this plan, bounded intake
+using cursor-grok-4.5-high only for that role (Composer/Grok family only; no SOL).
+Grok Low/Medium/High and Composer handle implementation. Embed the exact architect
+policy from this plan, bounded intake
 context, strict output schema, semantic validation, one repair resume, atomic
 .tiamat plan files, checkpoint, and graph projection. Use fake architect streams
 in all automated tests. Add/run validator/renderer unit tests, fake CLI

@@ -434,6 +434,91 @@ export async function browserInvoke<T>(
     case "pick_intake_paths": {
       return [] as T;
     }
+    case "pick_output_dir": {
+      return null as T;
+    }
+    case "start_run": {
+      const state = ensureDemoState();
+      const run = state.run;
+      if (!run) {
+        throw new Error("no demo run");
+      }
+      const inputPaths = (args?.inputPaths as string[] | undefined) ?? [];
+      const outputDir = String(args?.outputDir ?? "").trim();
+      if (inputPaths.length === 0) {
+        throw new Error("input_paths must not be empty");
+      }
+      if (!outputDir) {
+        throw new Error("output_dir must not be empty");
+      }
+      if (!state.preflight?.canStart) {
+        throw new Error("intake is not ready; complete preflight and trust first");
+      }
+      const managedRunRoot = `${outputDir.replace(/[\\/]+$/, "")}\\run-${run.runId}`;
+      state.run = {
+        ...run,
+        status: "running",
+        updatedAtUtc: new Date().toISOString(),
+        metadata: {
+          ...run.metadata,
+          managedRunRoot,
+          outputDir,
+          inputPaths,
+        },
+      };
+      appendEvent(
+        state,
+        "run.started",
+        `Started run under ${managedRunRoot}`,
+        { managedRunRoot, outputDir, inputCount: inputPaths.length },
+      );
+      saveState(state);
+      return {
+        runId: run.runId,
+        status: "running",
+        message: "orchestrator started",
+        managedRunRoot,
+      } as T;
+    }
+    case "cancel_run": {
+      const state = ensureDemoState();
+      const run = state.run;
+      if (!run) {
+        throw new Error("no demo run");
+      }
+      state.run = {
+        ...run,
+        status: "cancelled",
+        updatedAtUtc: new Date().toISOString(),
+      };
+      appendEvent(state, "run.cancelled", "Run cancelled by user", {});
+      saveState(state);
+      return {
+        runId: run.runId,
+        status: "cancelled",
+        message: "cancelled",
+        activeAttempts: 0,
+        completedPhases: 0,
+        totalPhases: 0,
+        managedRunRoot: (run.metadata.managedRunRoot as string) ?? null,
+      } as T;
+    }
+    case "get_run_status": {
+      const state = ensureDemoState();
+      const run = state.run;
+      if (!run) {
+        throw new Error("no demo run");
+      }
+      return {
+        runId: run.runId,
+        status: run.status === "Created" ? "idle" : run.status.toLowerCase(),
+        message: `status=${run.status}`,
+        activeAttempts: 0,
+        completedPhases: 0,
+        totalPhases: 0,
+        managedRunRoot: (run.metadata.managedRunRoot as string) ?? null,
+      } as T;
+    }
     case "run_intake_preflight": {
       const state = ensureDemoState();
       const paths = (args?.paths as string[] | undefined) ?? [];
@@ -551,7 +636,7 @@ export async function browserInvoke<T>(
         argv,
         commandDisplay: argv.join(" "),
         stdinPreview,
-        timeoutMs: Number(nested.timeoutMs ?? 120000),
+        timeoutMs: Number(nested.timeoutMs ?? 1_200_000),
         workspace,
         executable: "fixtures/cursor-cli/fake-agent.mjs",
         spawned: false,
@@ -916,12 +1001,11 @@ export async function browserInvoke<T>(
         ok: true,
         runId,
         modelSelection: {
-          requestedModel: "gpt-5.6-sol-high",
-          selectedModel: "gpt-5.6-sol-high",
+          requestedModel: "cursor-grok-4.5-high",
+          selectedModel: "cursor-grok-4.5-high",
           degraded: false,
-          reason: "preferred SOL architect model available",
+          reason: "preferred Cursor Grok High architect model available",
           availableModels: [
-            "gpt-5.6-sol-high",
             "cursor-grok-4.5-high",
             "composer-2.5",
           ],
@@ -944,7 +1028,7 @@ export async function browserInvoke<T>(
         attempts: [
           {
             attempt: 1,
-            model: "gpt-5.6-sol-high",
+            model: "cursor-grok-4.5-high",
             chatId: "chat-architect-valid",
             repaired: false,
             proof: {
@@ -958,9 +1042,9 @@ export async function browserInvoke<T>(
                 "--mode",
                 "plan",
                 "--model",
-                "gpt-5.6-sol-high",
+                "cursor-grok-4.5-high",
               ],
-              model: "gpt-5.6-sol-high",
+              model: "cursor-grok-4.5-high",
             },
           },
         ],
@@ -977,7 +1061,7 @@ export async function browserInvoke<T>(
           runId,
           phaseCount: plan.phases.length,
           degradedMode: false,
-          selectedModel: "gpt-5.6-sol-high",
+          selectedModel: "cursor-grok-4.5-high",
         },
       );
       saveState(state);
@@ -2095,9 +2179,8 @@ function browserCursorCapability() {
     auth: "ready",
     authMessage: "Fake CLI status reports ready.",
     models: [
-      { id: "gpt-5.6-sol-high", label: "gpt-5.6-sol-high" },
       { id: "composer-2.5", label: "composer-2.5" },
-      { id: "composer-2.5-fast", label: "composer-2.5-fast" },
+      { id: "cursor-grok-4.5-low", label: "cursor-grok-4.5-low" },
       { id: "cursor-grok-4.5-medium", label: "cursor-grok-4.5-medium" },
       { id: "cursor-grok-4.5-high", label: "cursor-grok-4.5-high" },
     ],

@@ -1,13 +1,33 @@
 use serde::{Deserialize, Serialize};
 
 pub const MINIMUM_CURSOR_CLI_VERSION: &str = "0.1.0";
-pub const DEFAULT_CURSOR_TIMEOUT_MS: u64 = 120_000;
+/// Default implementation-agent wall clock. Prefer `TimeoutSettings::from_env()`
+/// at call sites so `TIAMAT_PHASE_TIMEOUT_MS` is honoured.
+pub const DEFAULT_CURSOR_TIMEOUT_MS: u64 = crate::cursor::timeouts::DEFAULT_PHASE_TIMEOUT_MS;
 pub const PROBE_TIMEOUT_MS: u64 = 5_000;
 pub const MODELS_PROBE_TIMEOUT_MS: u64 = 8_000;
 pub const HELP_EXCERPT_LIMIT: usize = 4_000;
 
 pub const ENV_EXECUTABLE_KEYS: &[&str] = &["TIAMAT_CURSOR_CLI", "CURSOR_CLI_PATH"];
 pub const CANDIDATE_NAMES: &[&str] = &["agent", "cursor-agent"];
+
+/// Tiamat only routes to Cursor Composer and Grok families (never SOL or other vendors).
+pub fn is_allowed_cursor_model(id: &str) -> bool {
+    let lower = id.to_ascii_lowercase();
+    if lower.contains("sol") || lower.contains("fast") {
+        return false;
+    }
+    lower.contains("composer") || lower.contains("grok")
+}
+
+/// Drop any model IDs outside the Composer/Grok allowlist.
+pub fn filter_allowed_cursor_models(models: &[CursorModelInfo]) -> Vec<CursorModelInfo> {
+    models
+        .iter()
+        .filter(|m| is_allowed_cursor_model(&m.id))
+        .cloned()
+        .collect()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -230,4 +250,12 @@ pub struct ProcessCapture {
     pub stderr: String,
     pub timed_out: bool,
     pub duration_ms: u64,
+    /// Output exceeded the per-line or total caps in `security::limits` and was clipped.
+    pub truncated: bool,
+    /// Output arrived faster than the caps allow, so the tail was dropped entirely.
+    pub flood_detected: bool,
+    /// Whether the process tree was verifiably torn down with zero survivors.
+    pub cleanup_ok: bool,
+    /// Process-tree teardown needed force or could not be verified; evidence, not an error.
+    pub cleanup_warning: Option<String>,
 }

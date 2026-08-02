@@ -1,42 +1,29 @@
-import { useCallback, useState, type DragEvent } from "react";
+import { useState, type DragEvent } from "react";
 import type { PreflightReport } from "../../domain/intake";
-import { canStartImplementation } from "../../domain/intake";
 import {
   confirmIntakeTrust,
   pickIntakePaths,
   runIntakePreflight,
 } from "../../lib/tauri/commands";
-import { PreflightCard } from "../preflight/PreflightCard";
 
 interface IntakePanelProps {
   report: PreflightReport | null;
   onReportChange: (report: PreflightReport | null) => void;
-  onStart: () => void;
-  starting?: boolean;
+  selectedPaths: string[];
+  onPathsChange: (paths: string[]) => void;
 }
 
 export function IntakePanel({
   report,
   onReportChange,
-  onStart,
-  starting = false,
+  selectedPaths,
+  onPathsChange,
 }: IntakePanelProps) {
   const [pathDraft, setPathDraft] = useState("");
-  const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
-
-  const mergePaths = useCallback((incoming: string[]) => {
-    setSelectedPaths((prev) => {
-      const set = new Set(prev);
-      for (const path of incoming) {
-        const trimmed = path.trim();
-        if (trimmed) set.add(trimmed);
-      }
-      return [...set];
-    });
-  }, []);
+  const [trustAck, setTrustAck] = useState(false);
 
   async function analyze(paths: string[]) {
     if (paths.length === 0) {
@@ -45,6 +32,7 @@ export function IntakePanel({
     }
     setBusy(true);
     setError(null);
+    setTrustAck(false);
     try {
       const next = await runIntakePreflight(paths);
       onReportChange(next);
@@ -65,27 +53,21 @@ export function IntakePanel({
         setBusy(false);
         return;
       }
-      mergePaths(picked);
-      await analyze([...new Set([...selectedPaths, ...picked])]);
+      const next = [...new Set([...selectedPaths, ...picked])];
+      onPathsChange(next);
+      await analyze(next);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setBusy(false);
     }
   }
 
-  async function onTrustChange(
-    acknowledgedUntrusted: boolean,
-    acknowledgedExecutionRisk: boolean,
-  ) {
-    if (!report) return;
+  async function onTrustToggle(checked: boolean) {
+    setTrustAck(checked);
+    if (!report || !checked) return;
     setBusy(true);
-    setError(null);
     try {
-      const next = await confirmIntakeTrust(
-        report.manifest.intakeId,
-        acknowledgedUntrusted,
-        acknowledgedExecutionRisk,
-      );
+      const next = await confirmIntakeTrust(report.manifest.intakeId, true, true);
       onReportChange(next);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -94,115 +76,131 @@ export function IntakePanel({
     }
   }
 
-  function onDrop(event: DragEvent<HTMLDivElement>) {
+  function onDrop(event: DragEvent) {
     event.preventDefault();
     setDragActive(false);
-    const files = [...event.dataTransfer.files];
+    const files = Array.from(event.dataTransfer.files);
     const paths = files
-      .map((file) => {
-        const withPath = file as File & { path?: string };
-        return withPath.path || file.name;
+      .map((f) => {
+        const withPath = f as File & { path?: string };
+        return withPath.path || f.name;
       })
       .filter(Boolean);
-    if (paths.length === 0) {
-      setError("Drop did not include usable paths. Paste an absolute path below.");
-      return;
-    }
-    mergePaths(paths);
-    void analyze(paths);
+    if (paths.length === 0) return;
+    const next = [...new Set([...selectedPaths, ...paths])];
+    onPathsChange(next);
+    void analyze(next);
   }
 
+  const needsTrust =
+    !!report &&
+    (!report.trust.acknowledgedUntrusted ||
+      !report.trust.acknowledgedExecutionRisk);
+  const hasBlockers = (report?.blockers.length ?? 0) > 0;
+
   return (
-    <section className="tiamat-panel" aria-label="Intake">
-      <h2>Intake</h2>
+    <section className="pane" data-testid="intake-panel">
+      <header className="pane-header">
+        <h2>Input</h2>
+        <p>Select the files or folders the project should be built from.</p>
+      </header>
+
       <div
-        className={`tiamat-dropzone${dragActive ? " is-active" : ""}`}
-        data-testid="intake-dropzone"
-        onDragEnter={(event) => {
-          event.preventDefault();
+        className={`drop-zone${dragActive ? " active" : ""}`}
+        data-testid="intake-drop-zone"
+        onDragOver={(e) => {
+          e.preventDefault();
           setDragActive(true);
         }}
-        onDragOver={(event) => event.preventDefault()}
         onDragLeave={() => setDragActive(false)}
         onDrop={onDrop}
       >
-        <p>Drop folders or files to begin preflight.</p>
-        <p className="tiamat-muted">
-          Selected content is treated as untrusted project data.
-        </p>
-        <div className="tiamat-controls">
-          <button
-            type="button"
-            data-testid="intake-pick-files"
-            disabled={busy}
-            onClick={() => void onPick("file")}
-          >
-            Add files
-          </button>
-          <button
-            type="button"
-            data-testid="intake-pick-folder"
-            disabled={busy}
-            onClick={() => void onPick("folder")}
-          >
-            Add folder
-          </button>
-        </div>
-        <label className="tiamat-path-entry">
-          <span>Path</span>
-          <input
-            data-testid="intake-path-input"
-            value={pathDraft}
-            placeholder="C:\path\to\project"
-            onChange={(event) => setPathDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && pathDraft.trim()) {
-                mergePaths([pathDraft]);
-                void analyze([pathDraft.trim()]);
-                setPathDraft("");
-              }
-            }}
-          />
-        </label>
-        <button
-          type="button"
-          data-testid="intake-analyze"
-          disabled={busy || (!pathDraft.trim() && selectedPaths.length === 0)}
-          onClick={() => {
-            const paths = pathDraft.trim()
-              ? [...selectedPaths, pathDraft.trim()]
-              : selectedPaths;
-            mergePaths(paths);
-            setPathDraft("");
-            void analyze(paths);
-          }}
-        >
-          {busy ? "Analyzing…" : "Run preflight"}
-        </button>
-        {selectedPaths.length > 0 ? (
-          <ul className="tiamat-path-list" data-testid="intake-selected-paths">
-            {selectedPaths.map((path) => (
-              <li key={path}>{path}</li>
-            ))}
-          </ul>
-        ) : null}
+        Drop files or folders here
       </div>
 
-      {error ? (
-        <p className="tiamat-error" role="alert" data-testid="intake-error">
+      <div className="button-row">
+        <button
+          type="button"
+          data-testid="pick-files"
+          disabled={busy}
+          onClick={() => void onPick("file")}
+        >
+          Pick files
+        </button>
+        <button
+          type="button"
+          data-testid="pick-folder"
+          disabled={busy}
+          onClick={() => void onPick("folder")}
+        >
+          Pick folder
+        </button>
+      </div>
+
+      <form
+        className="path-form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!pathDraft.trim()) return;
+          const next = [...new Set([...selectedPaths, pathDraft.trim()])];
+          onPathsChange(next);
+          setPathDraft("");
+          void analyze(next);
+        }}
+      >
+        <input
+          data-testid="intake-path-input"
+          value={pathDraft}
+          onChange={(e) => setPathDraft(e.target.value)}
+          placeholder="Or paste a path and press Enter"
+          disabled={busy}
+        />
+        <button type="submit" disabled={busy || !pathDraft.trim()}>
+          Add
+        </button>
+      </form>
+
+      {selectedPaths.length > 0 && (
+        <ul className="path-list" data-testid="intake-paths">
+          {selectedPaths.map((p) => (
+            <li key={p}>{p}</li>
+          ))}
+        </ul>
+      )}
+
+      {error && (
+        <p className="error" data-testid="intake-error">
           {error}
         </p>
-      ) : null}
+      )}
 
-      <PreflightCard
-        report={report}
-        busy={busy || starting}
-        onTrustChange={(untrusted, executionRisk) =>
-          void onTrustChange(untrusted, executionRisk)
-        }
-        onStart={onStart}
-        canStart={canStartImplementation(report)}
-      />
+      {report && (
+        <div className="preflight-summary" data-testid="preflight-summary">
+          <p>
+            {report.manifest.projects.length} project(s) ·{" "}
+            {report.canStart ? "ready" : "needs attention"}
+          </p>
+          {hasBlockers && (
+            <ul className="blockers">
+              {report.blockers.map((b) => (
+                <li key={b}>{b}</li>
+              ))}
+            </ul>
+          )}
+          {needsTrust && !hasBlockers && (
+            <label className="trust-ack" data-testid="trust-ack">
+              <input
+                type="checkbox"
+                checked={trustAck}
+                onChange={(e) => void onTrustToggle(e.target.checked)}
+                disabled={busy}
+              />
+              I understand these sources will be read and agents will run
+              commands in the output folder.
+            </label>
+          )}
+        </div>
+      )}
     </section>
   );
 }

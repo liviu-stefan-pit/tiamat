@@ -13,7 +13,6 @@ describe("Shell accessibility", () => {
     const { container } = render(<App />);
     const results = await axe(container, {
       rules: {
-        // React Flow canvas uses presentation nodes; keep shell landmarks/labels.
         "color-contrast": { enabled: false },
       },
     });

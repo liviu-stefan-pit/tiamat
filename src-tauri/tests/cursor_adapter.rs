@@ -64,9 +64,12 @@ fn run_fake(mode: &str, extra: &[&str], timeout_ms: u64, stdin: Option<&str>) ->
         },
         Ok(Err(e)) => panic!("failed to collect output: {e}"),
         Err(_) => {
+            #[cfg(windows)]
             let _ = Command::new("taskkill")
                 .args(["/PID", &pid.to_string(), "/T", "/F"])
                 .output();
+            #[cfg(not(windows))]
+            let _ = Command::new("kill").args(["-9", &pid.to_string()]).output();
             let drained = rx.recv_timeout(Duration::from_millis(500)).ok();
             let (stdout, stderr) = match drained {
                 Some(Ok(output)) => (

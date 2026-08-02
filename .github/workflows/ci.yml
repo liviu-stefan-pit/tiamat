@@ -8,8 +8,12 @@ on:
 
 jobs:
   verify:
-    name: Format, lint, unit, contract, and E2E smoke
-    runs-on: windows-latest
+    name: Verify (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -25,11 +29,23 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Linux WebKit dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev
+
       - name: Install dependencies
         run: npm ci
 
       - name: Install Playwright Chromium
-        run: npx playwright install chromium
+        run: npx playwright install chromium --with-deps
 
       - name: Rust format check
         run: cargo fmt --all --check

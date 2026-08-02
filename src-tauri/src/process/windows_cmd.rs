@@ -1,5 +1,6 @@
 //! Windows executable / wrapper argv normalization shared by hosted spawn and probes.
 
+#[cfg(windows)]
 use std::path::Path;
 
 /// Normalize argv so `.cmd`/`.bat` run via `cmd.exe` and `.ps1` via PowerShell.

@@ -7,14 +7,14 @@ use std::collections::HashMap;
 
 use crate::cursor::{
     parse_stream_json, prepare_hosted_cursor_argv, CursorAuthStatus, CursorCapabilityReport,
-    ProcessCapture, DEFAULT_CURSOR_TIMEOUT_MS,
+    ProcessCapture,
 };
 use crate::db::Store;
 use crate::intake::PreflightReport;
 use crate::planner::context::package_architect_context;
 use crate::planner::invoke::build_architect_command;
 use crate::planner::model::select_architect_model;
-use crate::planner::parse::extract_plan_json_object;
+use crate::planner::parse::extract_final_json_object;
 use crate::planner::persist::{checkpoint_control_plan, write_plan_artifacts};
 use crate::planner::prompt::{repair_prompt, ARCHITECT_SYSTEM_PROMPT};
 use crate::planner::types::{
@@ -27,7 +27,9 @@ use crate::process::{
 use crate::security::{check_prompt_size, redact_line, OutputLimitConfig};
 use crate::workspace::{write_manifest, RunWorkspaceManifest};
 
-const ARCHITECT_TIMEOUT_MS: u64 = 180_000;
+fn architect_timeout_ms() -> u64 {
+    crate::cursor::TimeoutSettings::from_env().architect_timeout_ms
+}
 const STDERR_EXCERPT_LIMIT: usize = 800;
 
 pub struct ArchitectPipelineRequest<'a> {
@@ -321,7 +323,7 @@ fn invoke_and_validate(
         model,
         prompt,
         resume_chat_id,
-        Some(ARCHITECT_TIMEOUT_MS.max(DEFAULT_CURSOR_TIMEOUT_MS)),
+        Some(architect_timeout_ms()),
     )
     .map_err(|e| vec![e])?;
 
@@ -430,7 +432,7 @@ fn invoke_and_validate(
     ));
 
     // Prefer assistant-assembled text; fall back only to plan-shaped JSONL objects.
-    let json_text = match extract_plan_json_object(&parsed.assistant_text)
+    let json_text = match extract_final_json_object(&parsed.assistant_text)
         .or_else(|_| extract_plan_json_object_from_stream(&capture.stdout))
     {
         Ok(text) => text,
@@ -613,7 +615,7 @@ fn extract_plan_json_object_from_stream(stdout: &str) -> Result<String, String> 
     if let Some(plan) = last_plan {
         return Ok(plan);
     }
-    extract_plan_json_object(stdout)
+    extract_final_json_object(stdout)
 }
 
 fn looks_like_project_plan(value: &serde_json::Value) -> bool {

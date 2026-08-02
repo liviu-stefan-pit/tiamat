@@ -32,7 +32,8 @@ pub fn validate_raw_path(raw: &str) -> IntakeResult<()> {
         )));
     }
 
-    if has_alternate_data_stream(trimmed) {
+    // A colon is legal in a Unix filename, so this check only applies to NTFS.
+    if cfg!(windows) && has_alternate_data_stream(trimmed) {
         return Err(IntakeError::AlternateDataStream(trimmed.to_string()));
     }
 
@@ -116,7 +117,9 @@ pub fn strip_verbatim_prefix(path: PathBuf) -> PathBuf {
     path
 }
 
-/// Case-insensitive path containment check for Windows roots.
+/// Path containment check. Case-insensitive on Windows, case-sensitive on Unix:
+/// folding case on a case-sensitive filesystem would make `/managed/APP/evil`
+/// look like it lives inside `/managed/app`, defeating the write-root boundary.
 pub fn is_path_within_root(root: &Path, candidate: &Path) -> bool {
     let root_c = normalize_for_compare(root);
     let cand_c = normalize_for_compare(candidate);
@@ -135,7 +138,7 @@ fn normalize_for_compare(path: &Path) -> String {
     for component in stripped.components() {
         match component {
             Component::Prefix(p) => {
-                out.push_str(&p.as_os_str().to_string_lossy().to_ascii_lowercase());
+                out.push_str(&fold_case(&p.as_os_str().to_string_lossy()));
             }
             Component::RootDir => {
                 if !out.ends_with('\\') && !out.ends_with('/') {
@@ -146,12 +149,21 @@ fn normalize_for_compare(path: &Path) -> String {
                 if !out.ends_with('\\') && !out.ends_with('/') && !out.is_empty() {
                     out.push('\\');
                 }
-                out.push_str(&os.to_string_lossy().to_ascii_lowercase());
+                out.push_str(&fold_case(&os.to_string_lossy()));
             }
             Component::CurDir | Component::ParentDir => {}
         }
     }
     out
+}
+
+/// Fold case only where the filesystem does.
+pub(crate) fn fold_case(value: &str) -> String {
+    if cfg!(windows) {
+        value.to_ascii_lowercase()
+    } else {
+        value.to_string()
+    }
 }
 
 /// Ensure a resolved path remains inside an approved root; otherwise reject as escape.
@@ -181,12 +193,20 @@ mod tests {
         assert!(validate_raw_path(r"\\.\pipe\foo").is_err());
     }
 
+    #[cfg(windows)]
     #[test]
     fn rejects_alternate_data_streams() {
         assert!(validate_raw_path(r"C:\temp\file.txt:secret").is_err());
         assert!(validate_raw_path(r"C:\temp\file.txt").is_ok());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn allows_colons_in_unix_filenames() {
+        assert!(validate_raw_path("/tmp/build:2026-08-02.log").is_ok());
+    }
+
+    #[cfg(windows)]
     #[test]
     fn containment_is_case_insensitive_on_windows() {
         let root = Path::new(r"C:\Projects\App");
@@ -194,6 +214,25 @@ mod tests {
         assert!(!is_path_within_root(
             root,
             Path::new(r"C:\Projects\Other\src")
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn containment_is_case_sensitive_on_unix() {
+        let root = Path::new("/managed/run/projects/app");
+        assert!(is_path_within_root(
+            root,
+            Path::new("/managed/run/projects/app/src")
+        ));
+        assert!(!is_path_within_root(
+            root,
+            Path::new("/managed/run/projects/other/src")
+        ));
+        // A case-only difference is a different directory on Unix and must not pass.
+        assert!(!is_path_within_root(
+            root,
+            Path::new("/managed/run/projects/APP/evil.ts")
         ));
     }
 }

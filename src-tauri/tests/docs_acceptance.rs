@@ -52,17 +52,38 @@ fn release_prep_artifacts_exist() {
 #[test]
 fn package_hashes_match_p13_handoff_and_manifest() {
     let root = repo_root();
-    let nsis = "1a3b92779c381bf7d9bfa2d544c04255a28dda085f19b96328bd66768146648b";
-    let msi = "04299e8145f1750f49fef6c3a555cf47d783f5d6bf4dc2efa949f85c58f25b57";
+    // Keep the acceptance check tied to whatever PACKAGE-HASHES.md currently documents,
+    // rather than baking rebuild hashes into the test.
     let hashes = fs::read_to_string(root.join("docs/release/PACKAGE-HASHES.md")).unwrap();
-    assert!(hashes.contains(nsis));
-    assert!(hashes.contains(msi));
+    let mut sha256s = Vec::new();
+    for line in hashes.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix('|') {
+            let cols: Vec<_> = rest.split('|').map(str::trim).collect();
+            if cols.len() >= 3 {
+                let digest = cols[2].trim_matches('`');
+                if digest.len() == 64 && digest.chars().all(|c| c.is_ascii_hexdigit()) {
+                    sha256s.push(digest.to_string());
+                }
+            }
+        }
+    }
+    assert!(
+        sha256s.len() >= 2,
+        "PACKAGE-HASHES.md must list at least NSIS + MSI digests"
+    );
     let manifest = fs::read_to_string(root.join("docs/config/docs-manifest.json")).unwrap();
-    assert!(manifest.contains(nsis));
-    assert!(manifest.contains(msi));
     let handoff = fs::read_to_string(root.join("P13-RELEASE-HANDOFF.md")).unwrap();
-    assert!(handoff.contains(nsis));
-    assert!(handoff.contains(msi));
+    for digest in &sha256s {
+        assert!(
+            manifest.contains(digest),
+            "docs-manifest.json missing package hash {digest}"
+        );
+        assert!(
+            handoff.contains(digest),
+            "P13-RELEASE-HANDOFF.md missing package hash {digest}"
+        );
+    }
     // Historical P11 candidate remains append-only evidence of the pre-P13 build.
     let candidate = fs::read_to_string(root.join("P11-RELEASE-CANDIDATE.md")).unwrap();
     assert!(candidate.contains("216bb9a8da1ca025e19f8d3ef19060a83e335f0427d404d56059d370c74d0ee7"));

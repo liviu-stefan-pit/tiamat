@@ -84,16 +84,17 @@ fn materialize_rough_spec(
 }
 
 #[test]
-fn architect_model_prefers_sol_and_falls_back_to_grok_high() {
+fn architect_model_prefers_grok_high_and_ignores_sol() {
     let with_sol = probe_fake("architect_valid");
     let sel = select_architect_model(&with_sol.models).unwrap();
     assert_eq!(sel.selected_model, ARCHITECT_PREFERRED_MODEL);
     assert!(!sel.degraded);
+    assert!(!sel.available_models.iter().any(|id| id.contains("sol")));
 
     let no_sol = probe_fake("architect_no_sol");
     let sel = select_architect_model(&no_sol.models).unwrap();
     assert_eq!(sel.selected_model, ARCHITECT_FALLBACK_MODEL);
-    assert!(sel.degraded);
+    assert!(!sel.degraded);
 }
 
 #[test]

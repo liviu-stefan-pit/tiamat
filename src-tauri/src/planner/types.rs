@@ -4,7 +4,8 @@ use tiamat_contracts::ProjectPlan;
 use crate::cursor::CursorUsage;
 use crate::workspace::CheckpointRecord;
 
-pub const ARCHITECT_PREFERRED_MODEL: &str = "gpt-5.6-sol-high";
+pub const ARCHITECT_PREFERRED_MODEL: &str = "cursor-grok-4.5-high";
+/// Kept for degraded fuzzy matches / docs; architect preferred is already Grok High.
 pub const ARCHITECT_FALLBACK_MODEL: &str = "cursor-grok-4.5-high";
 pub const ARCHITECT_ROLE: &str = "architect";
 

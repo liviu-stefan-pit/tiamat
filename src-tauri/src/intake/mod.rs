@@ -33,6 +33,8 @@ mod boundary_tests {
 
     #[test]
     fn parser_rejects_ads_and_unc() {
+        // Alternate data streams are an NTFS concept; a colon is a legal Unix filename char.
+        #[cfg(windows)]
         assert!(validate_raw_path(r"C:\x:stream").is_err());
         assert!(validate_raw_path(r"\\host\share").is_err());
     }

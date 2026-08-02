@@ -122,6 +122,50 @@ export async function pickIntakePaths(
   return invokeCommand<string[]>("pick_intake_paths", { kind });
 }
 
+export async function pickOutputDir(): Promise<string | null> {
+  return invokeCommand<string | null>("pick_output_dir");
+}
+
+export interface StartRunResult {
+  runId: string;
+  status: string;
+  message: string;
+  managedRunRoot?: string | null;
+}
+
+export interface RunStatusSnapshot {
+  runId?: string | null;
+  status: string;
+  phase?: string | null;
+  message: string;
+  activeAttempts: number;
+  completedPhases: number;
+  totalPhases: number;
+  managedRunRoot?: string | null;
+}
+
+export async function startRun(input: {
+  inputPaths: string[];
+  outputDir: string;
+  maxConcurrent?: number;
+  fakeCliMode?: string;
+}): Promise<StartRunResult> {
+  return invokeCommand<StartRunResult>("start_run", {
+    inputPaths: input.inputPaths,
+    outputDir: input.outputDir,
+    maxConcurrent: input.maxConcurrent,
+    fakeCliMode: input.fakeCliMode,
+  });
+}
+
+export async function cancelRun(): Promise<RunStatusSnapshot> {
+  return invokeCommand<RunStatusSnapshot>("cancel_run");
+}
+
+export async function getRunStatus(): Promise<RunStatusSnapshot> {
+  return invokeCommand<RunStatusSnapshot>("get_run_status");
+}
+
 export async function runIntakePreflight(
   paths: string[],
 ): Promise<PreflightReport> {

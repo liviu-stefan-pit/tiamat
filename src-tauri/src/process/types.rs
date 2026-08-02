@@ -245,6 +245,12 @@ pub struct HostedProcessOutcome {
     pub cleanup_ok: bool,
     pub zero_survivors: bool,
     pub active_after_cleanup: u32,
+    /// Output hit the caps in `security::limits`, so stdout/stderr here are clipped.
+    pub truncated: bool,
+    /// Output was clipped because it arrived faster than the caps allow.
+    pub flood_detected: bool,
+    /// Teardown succeeded but needed force, or could not be fully verified.
+    pub cleanup_warning: Option<String>,
 }
 
 #[derive(Debug, Clone)]

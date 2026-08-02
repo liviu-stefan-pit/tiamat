@@ -7,11 +7,13 @@ import { IntakePanel } from "./IntakePanel";
 
 function Harness() {
   const [report, setReport] = useState<PreflightReport | null>(null);
+  const [paths, setPaths] = useState<string[]>([]);
   return (
     <IntakePanel
       report={report}
       onReportChange={setReport}
-      onStart={() => undefined}
+      selectedPaths={paths}
+      onPathsChange={setPaths}
     />
   );
 }
@@ -21,7 +23,7 @@ describe("IntakePanel", () => {
     resetBrowserStoreForTests();
   });
 
-  it("keeps Start disabled for blocked over-limit preflight", async () => {
+  it("shows blockers for over-limit preflight and hides trust", async () => {
     const user = userEvent.setup();
     render(<Harness />);
 
@@ -29,12 +31,14 @@ describe("IntakePanel", () => {
       screen.getByTestId("intake-path-input"),
       "C:\\fixture\\over-limit",
     );
-    await user.click(screen.getByTestId("intake-analyze"));
+    await user.click(screen.getByRole("button", { name: "Add" }));
 
     await waitFor(() => {
-      expect(screen.getByTestId("preflight-blockers")).toBeInTheDocument();
+      expect(screen.getByTestId("preflight-summary")).toBeInTheDocument();
     });
-    expect(screen.getByTestId("start-implementation")).toBeDisabled();
-    expect(screen.getByTestId("trust-untrusted")).toBeDisabled();
+    expect(screen.queryByTestId("trust-ack")).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/Inventory truncated: file count would exceed limit/),
+    ).toBeInTheDocument();
   });
 });

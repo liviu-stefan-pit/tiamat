@@ -96,6 +96,10 @@ pub fn run_argv_capture_env_classified(
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
             timed_out: false,
             duration_ms: started.elapsed().as_millis() as u64,
+            truncated: false,
+            flood_detected: false,
+            cleanup_ok: true,
+            cleanup_warning: None,
         }),
         Ok(Err(e)) => Err(format!("failed to collect output: {e}")),
         Err(_) => {
@@ -118,6 +122,10 @@ pub fn run_argv_capture_env_classified(
                 stderr: "process timed out".into(),
                 timed_out: true,
                 duration_ms: started.elapsed().as_millis() as u64,
+                truncated: false,
+                flood_detected: false,
+                cleanup_ok: true,
+                cleanup_warning: None,
             })
         }
     }

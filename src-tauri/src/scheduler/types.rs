@@ -8,7 +8,10 @@ pub const MODEL_GROK_MEDIUM: &str = "cursor-grok-4.5-medium";
 pub const MODEL_GROK_HIGH: &str = "cursor-grok-4.5-high";
 pub const MODEL_SOL: &str = "gpt-5.6-sol-high";
 
-pub const DEFAULT_MAX_ATTEMPTS: u32 = 4;
+/// Cap on attempts per phase. With 20-minute phase budgets, three attempts
+/// (Composer → Grok Low → Grok Medium/High) is enough escalation without
+/// burning an hour on a single stuck phase.
+pub const DEFAULT_MAX_ATTEMPTS: u32 = 3;
 pub const LEASE_TTL_SECS: i64 = 30;
 pub const ORCHESTRATOR_MODE: &str = "dag-scheduler";
 

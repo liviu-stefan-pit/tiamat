@@ -2,7 +2,6 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { EventEnvelope } from "../../domain/contracts";
-import { DEFAULT_EVENT_FILTER } from "../../domain/events";
 import { ActivityLog } from "./ActivityLog";
 
 function makeEvents(count: number): EventEnvelope[] {
@@ -13,7 +12,7 @@ function makeEvents(count: number): EventEnvelope[] {
     runId: "r1",
     phaseId: index % 2 === 0 ? "P01" : "P02",
     type: index % 2 === 0 ? "phase.started" : "system.info",
-    level: "info" as const,
+    level: index % 5 === 0 ? ("warning" as const) : ("info" as const),
     timestampUtc: new Date(Date.UTC(2026, 7, 2, 9, 0, index)).toISOString(),
     message:
       index === 0
@@ -24,60 +23,25 @@ function makeEvents(count: number): EventEnvelope[] {
 }
 
 describe("ActivityLog", () => {
-  it("virtualizes a large event list and supports follow/export controls", async () => {
-    const user = userEvent.setup();
-    const events = makeEvents(500);
-    render(
-      <ActivityLog
-        events={events}
-        filter={DEFAULT_EVENT_FILTER}
-        onFilterChange={() => undefined}
-      />,
-    );
+  it("virtualizes a large event list and supports export", async () => {
+    render(<ActivityLog events={makeEvents(500)} statusLine="running" />);
 
-    expect(screen.getByTestId("activity-log")).toHaveAttribute(
-      "data-virtualized",
-      "true",
-    );
-    expect(screen.getByTestId("log-count").textContent).toContain(
-      "Showing 500 of 500",
-    );
+    expect(screen.getByTestId("activity-log")).toBeInTheDocument();
+    expect(screen.getByTestId("run-status-line")).toHaveTextContent("running");
+    expect(screen.getByTestId("log-count").textContent).toBe("500");
     const rendered = screen.getAllByTestId("log-event").length;
     expect(rendered).toBeLessThan(120);
-    expect(screen.getByTestId("log-follow")).toBeChecked();
     expect(screen.getByTestId("log-export")).toBeInTheDocument();
-
-    await user.click(screen.getAllByTestId("log-expand")[0]!);
-    expect(screen.getAllByTestId("log-expand")[0]!.textContent).toMatch(
-      /Collapse/i,
-    );
   });
 
-  it("filters by category controls", async () => {
+  it("filters by level", async () => {
     const user = userEvent.setup();
-    let filter = { ...DEFAULT_EVENT_FILTER };
-    const { rerender } = render(
-      <ActivityLog
-        events={makeEvents(20)}
-        filter={filter}
-        onFilterChange={(next) => {
-          filter = next;
-        }}
-      />,
-    );
-    await user.selectOptions(screen.getByTestId("log-category"), "phase");
-    rerender(
-      <ActivityLog
-        events={makeEvents(20)}
-        filter={{ ...filter, category: "phase" }}
-        onFilterChange={(next) => {
-          filter = next;
-        }}
-      />,
-    );
+    render(<ActivityLog events={makeEvents(20)} />);
+    await user.selectOptions(screen.getByTestId("log-level-filter"), "warning");
     const rows = screen.getAllByTestId("log-event");
+    expect(rows.length).toBeGreaterThan(0);
     for (const row of rows) {
-      expect(row.getAttribute("data-type") ?? "").toMatch(/^phase\./);
+      expect(row.className).toMatch(/level-warning/);
     }
   });
 });

@@ -73,10 +73,12 @@ pub fn validate_read_roots(approved: &[String], requested: &[String]) -> Workspa
 
 fn normalize(path: &Path) -> String {
     let stripped = strip_verbatim_prefix(path.to_path_buf());
-    stripped
-        .to_string_lossy()
-        .to_ascii_lowercase()
-        .replace('/', "\\")
+    let text = stripped.to_string_lossy();
+    if cfg!(windows) {
+        text.to_ascii_lowercase().replace('/', "\\")
+    } else {
+        text.into_owned()
+    }
 }
 
 /// Stable lock name for a managed project write root.
@@ -88,30 +90,61 @@ pub fn lock_name_for(project_id: &str) -> String {
 mod tests {
     use super::*;
 
+    // Path syntax is platform-specific, so the fixtures are too.
+    #[cfg(windows)]
+    mod fixture {
+        pub const APP: &str = r"C:\managed\run\projects\app";
+        pub const A: &str = r"C:\managed\run\projects\a";
+        pub const B: &str = r"C:\managed\run\projects\b";
+        pub const A_SRC: &str = r"C:\managed\run\projects\a\src";
+        pub const OUTSIDE: &str = r"C:\source\app";
+        pub const TRAVERSAL: &str = r"..\other";
+        pub const NESTED: &str = r"src\main.rs";
+    }
+    #[cfg(unix)]
+    mod fixture {
+        pub const APP: &str = "/managed/run/projects/app";
+        pub const A: &str = "/managed/run/projects/a";
+        pub const B: &str = "/managed/run/projects/b";
+        pub const A_SRC: &str = "/managed/run/projects/a/src";
+        pub const OUTSIDE: &str = "/source/app";
+        pub const TRAVERSAL: &str = "../other";
+        pub const NESTED: &str = "src/main.rs";
+    }
+
     #[test]
     fn rejects_parent_traversal() {
-        let root = Path::new(r"C:\managed\run\projects\app");
-        assert!(validate_relative_within(root, r"..\other").is_err());
-        assert!(validate_relative_within(root, r"src\main.rs").is_ok());
+        let root = Path::new(fixture::APP);
+        assert!(validate_relative_within(root, fixture::TRAVERSAL).is_err());
+        assert!(validate_relative_within(root, fixture::NESTED).is_ok());
     }
 
     #[test]
     fn write_root_must_be_within_approved() {
-        let approved = vec![
-            r"C:\managed\run\projects\a".into(),
-            r"C:\managed\run\projects\b".into(),
-        ];
-        assert!(
-            validate_write_roots(&approved, &[r"C:\managed\run\projects\a\src".into()]).is_ok()
-        );
-        assert!(validate_write_roots(&approved, &[r"C:\source\app".into()]).is_err());
+        let approved = vec![fixture::A.to_string(), fixture::B.to_string()];
+        assert!(validate_write_roots(&approved, &[fixture::A_SRC.into()]).is_ok());
+        assert!(validate_write_roots(&approved, &[fixture::OUTSIDE.into()]).is_err());
     }
 
+    #[cfg(windows)]
     #[test]
-    fn containment_is_case_insensitive() {
+    fn containment_is_case_insensitive_on_windows() {
         assert!(is_within_managed(
             r"C:\Managed\Run\projects\App",
             r"c:\managed\run\projects\app\src"
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn containment_is_case_sensitive_on_unix() {
+        assert!(is_within_managed(
+            fixture::APP,
+            "/managed/run/projects/app/src"
+        ));
+        assert!(!is_within_managed(
+            fixture::APP,
+            "/managed/run/projects/APP/src"
         ));
     }
 }

@@ -1,431 +1,257 @@
-.tiamat-shell {
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  background:
-    radial-gradient(ellipse at top left, #1a2736 0%, transparent 55%),
-    linear-gradient(180deg, #0c1117 0%, #121820 100%);
-  color: #e8edf2;
-  font-family: "Segoe UI", "Candara", system-ui, sans-serif;
+:root {
+  color-scheme: light;
+  --bg0: #f3efe6;
+  --bg1: #e8e1d4;
+  --ink: #1c1915;
+  --muted: #5c564c;
+  --accent: #0f6b5c;
+  --accent-ink: #f7f4ee;
+  --danger: #8b2e2e;
+  --line: #cfc5b4;
+  --panel: #fbf8f2;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
 }
 
-.tiamat-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 1rem;
-  align-items: flex-end;
-  padding: 1.25rem 1.5rem;
-  border-bottom: 1px solid #243041;
-  background: linear-gradient(90deg, rgba(20, 28, 38, 0.9), rgba(15, 20, 25, 0.6));
+* {
+  box-sizing: border-box;
 }
 
-.tiamat-header h1 {
+body {
   margin: 0;
-  font-size: 1.65rem;
-  font-weight: 650;
-  letter-spacing: 0.02em;
+  background:
+    radial-gradient(circle at top left, #fff8ea 0%, transparent 40%),
+    linear-gradient(160deg, var(--bg0), var(--bg1));
+  color: var(--ink);
+  min-height: 100vh;
 }
 
-.tiamat-subtitle {
-  margin: 0.25rem 0 0;
-  color: #9aa8b8;
-  font-size: 0.95rem;
-}
-
-.tiamat-header-meta {
+.tiamat-shell {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 1.75rem 1.5rem 2.25rem;
   display: flex;
   flex-direction: column;
-  gap: 0.2rem;
-  align-items: flex-end;
-  color: #9aa8b8;
-  font-size: 0.85rem;
+  gap: 1.25rem;
 }
 
-.tiamat-linkish {
-  border: none;
-  background: transparent;
-  color: #8fb0ff;
-  cursor: pointer;
-  padding: 0;
-  font: inherit;
-  text-decoration: underline;
-  text-underline-offset: 0.15em;
+.shell-header {
+  margin-bottom: 0.25rem;
 }
 
-.tiamat-layout {
-  flex: 1;
-  display: grid;
-  grid-template-columns: minmax(240px, 300px) 1fr;
-  gap: 1rem;
-  padding: 1rem 1.5rem 1.5rem;
-  min-height: 0;
+.shell-header h1 {
+  margin: 0;
+  font-size: 2.4rem;
+  letter-spacing: -0.03em;
 }
 
-.tiamat-main-split {
+.shell-tagline {
+  margin: 0.35rem 0 0;
+  color: var(--muted);
+}
+
+.shell-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 1rem;
-  min-height: 0;
+  gap: 1.25rem;
 }
 
-@media (max-width: 960px) {
-  .tiamat-main-split {
+@media (max-width: 800px) {
+  .shell-grid {
     grid-template-columns: 1fr;
   }
 }
 
-
-.tiamat-panel {
-  background: rgba(21, 27, 35, 0.92);
-  border: 1px solid #243041;
+.pane {
+  background: var(--panel);
+  border: 1px solid var(--line);
   border-radius: 12px;
-  padding: 1rem;
+  padding: 1.15rem 1.25rem 1.35rem;
 }
 
-.tiamat-panel h2 {
-  margin: 0 0 0.5rem;
-  font-size: 1rem;
-  color: #c5d0dc;
+.pane-header {
+  margin-bottom: 0.35rem;
 }
 
-.tiamat-panel p {
+.pane-header h2 {
   margin: 0;
-  color: #9aa8b8;
-  font-size: 0.9rem;
-  line-height: 1.45;
+  font-size: 1.15rem;
 }
 
-.tiamat-muted {
-  color: #7f8b99 !important;
-  font-size: 0.85rem !important;
+.pane-header p {
+  margin: 0.35rem 0 0.9rem;
+  color: var(--muted);
+  font-size: 0.92rem;
 }
 
-.tiamat-dropzone {
-  border: 1px dashed #3a4a5c;
+.drop-zone {
+  border: 1.5px dashed var(--line);
   border-radius: 10px;
-  padding: 1rem;
-  background: rgba(10, 14, 20, 0.35);
+  padding: 1.35rem 1.25rem;
+  text-align: center;
+  color: var(--muted);
+  margin: 0 0 1rem;
+}
+
+.drop-zone.active {
+  border-color: var(--accent);
+  background: rgba(15, 107, 92, 0.06);
+}
+
+.button-row,
+.run-bar,
+.log-toolbar,
+.path-form {
   display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  align-items: center;
 }
 
-.tiamat-dropzone.is-active {
-  border-color: #5b7cff;
-  background: rgba(30, 42, 64, 0.55);
+.button-row {
+  margin: 0 0 0.85rem;
 }
 
-.tiamat-path-entry {
+.path-form {
+  margin: 0 0 0.35rem;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border: none;
+  border-radius: 8px;
+  padding: 0.55rem 1.05rem;
+  margin: 0.1rem 0;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+input,
+select {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.55rem 0.85rem;
+  background: white;
+  min-width: 0;
+  flex: 1;
+}
+
+.path-list,
+.blockers {
+  margin: 0.85rem 0 0;
+  padding-left: 1.15rem;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.preflight-summary {
+  margin-top: 1rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--line);
+}
+
+.trust-ack {
   display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  font-size: 0.75rem;
-  color: #9aa8b8;
+  gap: 0.65rem;
+  align-items: flex-start;
+  margin-top: 0.75rem;
+  font-size: 0.9rem;
 }
 
-.tiamat-path-entry input {
-  border: 1px solid #3a4a5c;
-  background: #0f1419;
-  color: #e8edf2;
-  border-radius: 6px;
-  padding: 0.4rem 0.5rem;
+.output-current {
+  margin: 0.9rem 0 0;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 0.85rem;
+  word-break: break-all;
 }
 
-.tiamat-path-list,
-.tiamat-project-list,
-.tiamat-preflight ul {
-  margin: 0.35rem 0 0;
-  padding-left: 1.1rem;
-  color: #9aa8b8;
-  font-size: 0.82rem;
+.error {
+  color: var(--danger);
+  margin: 0.65rem 0 0;
 }
 
-.tiamat-preflight {
-  margin-top: 0.9rem;
+.run-bar {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0.95rem 1.15rem;
+  gap: 0.85rem;
+}
+
+.run-bar button {
+  min-width: 5.5rem;
+}
+
+.status-line {
+  margin: 0.25rem 0 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.activity-log .log-header {
   display: flex;
-  flex-direction: column;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  margin-bottom: 0.65rem;
+}
+
+.log-toolbar {
   gap: 0.65rem;
 }
 
-.tiamat-preflight h3,
-.tiamat-preflight h4 {
-  margin: 0;
-  color: #c5d0dc;
-}
-
-.tiamat-preflight h3 {
-  font-size: 0.95rem;
-}
-
-.tiamat-preflight h4 {
-  font-size: 0.82rem;
-  margin-bottom: 0.2rem;
-}
-
-.tiamat-preflight-meta {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.4rem 0.75rem;
-  margin: 0;
-}
-
-.tiamat-preflight-meta div {
-  display: flex;
-  justify-content: space-between;
-  gap: 0.5rem;
-  font-size: 0.82rem;
-}
-
-.tiamat-preflight-meta dt {
-  color: #7f8b99;
-}
-
-.tiamat-preflight-meta dd {
-  margin: 0;
-  color: #e8edf2;
-}
-
-.tiamat-trust {
-  display: flex;
-  flex-direction: column;
-  gap: 0.45rem;
-}
-
-.tiamat-trust label {
-  display: flex;
-  gap: 0.5rem;
-  align-items: flex-start;
-  font-size: 0.82rem;
-  color: #c5d0dc;
-  line-height: 1.35;
-}
-
-.tiamat-preflight > button,
-.tiamat-dropzone > button {
-  border: 1px solid #3a4a5c;
-  background: #1a2330;
-  color: #e8edf2;
-  border-radius: 8px;
-  padding: 0.45rem 0.75rem;
-  cursor: pointer;
-  width: fit-content;
-}
-
-.tiamat-preflight > button:disabled,
-.tiamat-dropzone > button:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.tiamat-graph-canvas {
-  margin-top: 0.75rem;
-  min-height: 140px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  padding: 1rem;
-  border-radius: 10px;
-  background:
-    linear-gradient(180deg, rgba(18, 28, 40, 0.8), rgba(12, 16, 22, 0.9)),
-    repeating-linear-gradient(
-      90deg,
-      transparent,
-      transparent 11px,
-      rgba(70, 90, 110, 0.08) 12px
-    );
-}
-
-.tiamat-graph-node {
-  min-width: 3.2rem;
-  text-align: center;
-  padding: 0.55rem 0.7rem;
-  border-radius: 8px;
-  border: 1px solid #3a4a5c;
-  font-size: 0.85rem;
-  font-weight: 600;
-}
-
-.tiamat-graph-node.is-ready {
-  background: #1d3a2c;
-  border-color: #2f6b4c;
-}
-
-.tiamat-graph-node.is-running {
-  background: #2a3348;
-  border-color: #5b7cff;
-  box-shadow: 0 0 0 1px rgba(91, 124, 255, 0.25);
-}
-
-.tiamat-graph-node.is-blocked {
-  background: #3a2424;
-  border-color: #a63d3d;
-}
-
-.tiamat-graph-node.is-failed {
-  background: #402020;
-  border-color: #8b1e1e;
-}
-
-.tiamat-graph-node.is-passed {
-  background: #1d3a2c;
-  border-color: #2f7d4a;
-}
-
-.tiamat-graph-node.is-draft {
-  background: #2a2f38;
-  color: #9aa8b8;
-}
-
-.tiamat-graph-edge {
-  width: 2rem;
-  height: 2px;
-  background: #3a4a5c;
-}
-
-.tiamat-controls {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin: 0.75rem 0;
-}
-
-.tiamat-controls button {
-  border: 1px solid #3a4a5c;
-  background: #1a2330;
-  color: #e8edf2;
-  border-radius: 8px;
-  padding: 0.45rem 0.75rem;
-  cursor: pointer;
-}
-
-.tiamat-controls button:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.tiamat-controls button.danger {
-  border-color: #6b3a3a;
-  background: #2a1717;
-}
-
-.tiamat-log {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-height: 280px;
-}
-
-.tiamat-log-header {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-.tiamat-log-filters {
-  display: grid;
-  grid-template-columns: 2fr 1fr 1fr;
-  gap: 0.5rem;
-}
-
-.tiamat-log-filters label {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  font-size: 0.75rem;
-  color: #9aa8b8;
-}
-
-.tiamat-log-filters input,
-.tiamat-log-filters select {
-  border: 1px solid #3a4a5c;
-  background: #0f1419;
-  color: #e8edf2;
-  border-radius: 6px;
-  padding: 0.4rem 0.5rem;
-}
-
-.tiamat-log-list {
-  list-style: none;
-  margin: 0.75rem 0;
-  padding: 0;
+.log-scroller {
   overflow: auto;
-  flex: 1;
-  border: 1px solid #243041;
+  border: 1px solid var(--line);
   border-radius: 8px;
-  background: rgba(10, 14, 20, 0.45);
+  background: #fff;
+  margin-top: 0.15rem;
 }
 
-.tiamat-log-list li {
+.log-row {
   display: grid;
-  grid-template-columns: 3rem 4.5rem 9rem 1fr;
+  grid-template-columns: 3.5rem 9rem 1fr;
   gap: 0.5rem;
-  padding: 0.45rem 0.65rem;
-  border-bottom: 1px solid #1c2530;
+  align-items: center;
+  padding: 0 0.75rem;
+  border-bottom: 1px solid #eee7da;
   font-size: 0.82rem;
-  align-items: baseline;
 }
 
-.tiamat-log-seq {
-  color: #7f8b99;
+.log-seq {
+  color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
 
-.tiamat-log-level {
-  text-transform: uppercase;
-  font-size: 0.7rem;
-  letter-spacing: 0.04em;
+.log-type {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  color: var(--accent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.tiamat-log-level.level-info {
-  color: #7eb6ff;
+.log-msg {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.tiamat-log-level.level-warning {
-  color: #e2b45c;
+.level-warning .log-type {
+  color: #9a6700;
 }
 
-.tiamat-log-level.level-error {
-  color: #e27a7a;
-}
-
-.tiamat-log-level.level-debug {
-  color: #9aa8b8;
-}
-
-.tiamat-log-type {
-  color: #c5d0dc;
-  font-family: Consolas, "Courier New", monospace;
-  font-size: 0.78rem;
-}
-
-.tiamat-log-message {
-  color: #e8edf2;
-}
-
-.tiamat-error {
-  margin: 0.75rem 1.5rem 0;
-  padding: 0.65rem 0.85rem;
-  border-radius: 8px;
-  background: #2a1717;
-  border: 1px solid #6b3a3a;
-  color: #f0c7c7;
-}
-
-@media (max-width: 960px) {
-  .tiamat-layout {
-    grid-template-columns: 1fr;
-  }
-
-  .tiamat-log-filters {
-    grid-template-columns: 1fr;
-  }
-
-  .tiamat-log-list li {
-    grid-template-columns: 3rem 4rem 1fr;
-  }
-
-  .tiamat-log-message {
-    grid-column: 1 / -1;
-  }
+.level-error .log-type {
+  color: var(--danger);
 }

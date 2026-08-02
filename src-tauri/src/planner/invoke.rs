@@ -92,7 +92,7 @@ mod tests {
             "agent",
             &features(),
             dir.path(),
-            "gpt-5.6-sol-high",
+            "cursor-grok-4.5-high",
             "plan only",
             None,
             Some(5_000),
@@ -105,7 +105,7 @@ mod tests {
         assert!(built
             .argv
             .windows(2)
-            .any(|w| w == ["--model", "gpt-5.6-sol-high"]));
+            .any(|w| w == ["--model", "cursor-grok-4.5-high"]));
     }
 
     #[test]
@@ -117,7 +117,7 @@ mod tests {
             "agent",
             &feats,
             dir.path(),
-            "gpt-5.6-sol-high",
+            "cursor-grok-4.5-high",
             "x",
             None,
             None,

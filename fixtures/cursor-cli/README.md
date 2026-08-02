@@ -21,7 +21,7 @@
 # - architect_valid (plan-mode JSON plan; requires --mode plan, rejects --force)
 # - architect_invalid (schema/semantic-invalid plan)
 # - architect_repairable (invalid first, valid on --resume)
-# - architect_no_sol (valid plan; model list omits gpt-5.6-sol-high)
+# - architect_no_sol (valid plan; model list omits SOL; architect prefers Grok High)
 # - impl_success (writes src/feature.ts + immutable phase-result; ensures gate scripts)
 # - impl_fail_tests (writes feature but unit gate exits 1)
 # - impl_escape (writes ESCAPE_PROOF.txt outside write root)

@@ -113,12 +113,12 @@ pub fn find_new_escapes(
     for rel in after.difference(before) {
         let abs = managed_run_root.join(rel);
         let abs_s = abs.to_string_lossy().to_string();
-        // Ignore control/.tiamat and quarantine itself.
-        let lower = rel.to_ascii_lowercase();
-        if lower.starts_with("control\\")
-            || lower.starts_with("quarantine\\")
-            || lower.starts_with("fingerprints\\")
-            || lower == "manifest.json"
+        // Ignore control/.tiamat and quarantine itself, under either separator.
+        let normalized = rel.to_ascii_lowercase().replace('\\', "/");
+        if normalized.starts_with("control/")
+            || normalized.starts_with("quarantine/")
+            || normalized.starts_with("fingerprints/")
+            || normalized == "manifest.json"
         {
             continue;
         }
@@ -134,9 +134,17 @@ pub fn find_new_escapes(
 }
 
 fn paths_equal(a: &str, b: &str) -> bool {
-    let na = a.replace('/', "\\").to_ascii_lowercase();
-    let nb = b.replace('/', "\\").to_ascii_lowercase();
-    na.trim_end_matches('\\') == nb.trim_end_matches('\\')
+    // Case folding is correct on Windows only; on Unix it would equate distinct paths.
+    let norm = |s: &str| {
+        let unified = s.replace('\\', "/");
+        let folded = if cfg!(windows) {
+            unified.to_ascii_lowercase()
+        } else {
+            unified
+        };
+        folded.trim_end_matches('/').to_string()
+    };
+    norm(a) == norm(b)
 }
 
 #[allow(dead_code)]
@@ -155,31 +163,53 @@ pub fn assert_no_escape(report: &DiffBoundaryReport) -> ExecutorResult<()> {
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
+    mod fixture {
+        pub const APP: &str = r"C:\managed\run\projects\app";
+        pub const OUTSIDE_FILE: &str = r"C:\managed\run\projects\other\evil.ts";
+        pub const REL_OK: &str = r"src\ok.ts";
+        pub const REL_FEATURE: &str = r"src\feature.ts";
+    }
+    #[cfg(unix)]
+    mod fixture {
+        pub const APP: &str = "/managed/run/projects/app";
+        pub const OUTSIDE_FILE: &str = "/managed/run/projects/other/evil.ts";
+        pub const REL_OK: &str = "src/ok.ts";
+        pub const REL_FEATURE: &str = "src/feature.ts";
+    }
+
     #[test]
     fn detects_escape_outside_write_root() {
-        let root = Path::new(r"C:\managed\run\projects\app");
+        let root = Path::new(fixture::APP);
         let report = validate_diff_boundaries(
             root,
-            &[r"C:\managed\run\projects\app".into()],
-            &[
-                r"src\ok.ts".into(),
-                r"C:\managed\run\projects\other\evil.ts".into(),
-            ],
+            &[fixture::APP.into()],
+            &[fixture::REL_OK.into(), fixture::OUTSIDE_FILE.into()],
         )
         .unwrap();
         assert!(!report.ok);
         assert_eq!(report.escaped_paths.len(), 1);
     }
 
+    #[cfg(unix)]
     #[test]
-    fn accepts_in_root_relative_paths() {
-        let root = Path::new(r"C:\managed\run\projects\app");
+    fn detects_case_only_escape_on_unix() {
+        let root = Path::new(fixture::APP);
         let report = validate_diff_boundaries(
             root,
-            &[r"C:\managed\run\projects\app".into()],
-            &[r"src\feature.ts".into()],
+            &[fixture::APP.into()],
+            &["/managed/run/projects/APP/evil.ts".into()],
         )
         .unwrap();
+        assert!(!report.ok, "case-only difference must not pass containment");
+    }
+
+    #[test]
+    fn accepts_in_root_relative_paths() {
+        let root = Path::new(fixture::APP);
+        let report =
+            validate_diff_boundaries(root, &[fixture::APP.into()], &[fixture::REL_FEATURE.into()])
+                .unwrap();
         assert!(report.ok);
     }
 }

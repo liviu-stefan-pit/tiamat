@@ -61,7 +61,23 @@ fn free_disk_bytes(path: &Path) -> Option<u64> {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(unix)]
+fn free_disk_bytes(path: &Path) -> Option<u64> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let c_path = CString::new(path.as_os_str().as_bytes()).ok()?;
+    // SAFETY: zeroed statvfs is a valid out-param; c_path stays alive for the call.
+    let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(c_path.as_ptr(), &mut stat) } != 0 {
+        return None;
+    }
+    // f_bavail is space available to unprivileged users, matching the Windows
+    // GetDiskFreeSpaceExW "free available to caller" figure used above.
+    Some((stat.f_bavail as u64).saturating_mul(stat.f_frsize as u64))
+}
+
+#[cfg(not(any(windows, unix)))]
 fn free_disk_bytes(_path: &Path) -> Option<u64> {
     None
 }

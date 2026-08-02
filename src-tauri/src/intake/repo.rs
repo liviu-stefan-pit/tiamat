@@ -163,6 +163,10 @@ mod tests {
 
     #[test]
     fn stable_project_id_sanitizes() {
-        assert_eq!(stable_project_id(Path::new(r"C:\tmp\My App!")), "my-app");
+        #[cfg(windows)]
+        let path = Path::new(r"C:\tmp\My App!");
+        #[cfg(not(windows))]
+        let path = Path::new("/tmp/My App!");
+        assert_eq!(stable_project_id(path), "my-app");
     }
 }

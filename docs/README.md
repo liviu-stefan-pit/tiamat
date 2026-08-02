@@ -10,7 +10,7 @@ Version **0.1.0** · Release candidate handoff from [P11](../P11-RELEASE-CANDIDA
 | First run | [user/first-run.md](user/first-run.md) |
 | Intake and trust | [user/intake-and-trust.md](user/intake-and-trust.md) |
 | Start implementation | [user/start-implementation.md](user/start-implementation.md) |
-| Graph and logger | [user/graph-and-logger.md](user/graph-and-logger.md) |
+| Graph and logger | [user/graph-and-logger.md](user/graph-and-logger.md) (activity log; no graph canvas) |
 | Pause, cancel, global abort | [user/pause-cancel-abort.md](user/pause-cancel-abort.md) |
 | Isolated output promotion | [user/promotion-and-export.md](user/promotion-and-export.md) |
 | Normal-mode containment limits | [user/containment-limits.md](user/containment-limits.md) |

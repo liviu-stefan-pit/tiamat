@@ -6,6 +6,7 @@ pub mod process;
 pub mod redaction;
 pub mod resolve;
 pub mod stream;
+pub mod timeouts;
 pub mod types;
 
 pub use builder::{build_cursor_command, preview_built_command, BuilderError};
@@ -21,6 +22,7 @@ pub use resolve::{
     strip_lone_dash_argv, unwind_cursor_launcher, UnwoundCursorRuntime,
 };
 pub use stream::parse_stream_json;
+pub use timeouts::{TimeoutSettings, DEFAULT_ARCHITECT_TIMEOUT_MS, DEFAULT_PHASE_TIMEOUT_MS};
 pub use types::*;
 
 pub const MODULE: &str = "cursor";

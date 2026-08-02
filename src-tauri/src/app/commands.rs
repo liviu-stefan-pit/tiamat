@@ -27,6 +27,8 @@ pub struct AppState {
     pub workspace_parent: Mutex<Option<PathBuf>>,
     pub process_host: crate::process::ProcessHost,
     pub abort: crate::process::AbortController,
+    /// Active orchestrator supervisor (architect + DAG phase execution).
+    pub orchestrator: crate::orchestrator::OrchestratorSlot,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -282,6 +284,45 @@ pub fn pick_intake_paths(kind: String) -> Result<Vec<String>, String> {
         }
         _ => Err(format!("unsupported pick kind: {kind}")),
     }
+}
+
+/// Pick the directory where the run will be materialized and built.
+#[tauri::command]
+pub fn pick_output_dir() -> Result<Option<String>, String> {
+    let folder = rfd::FileDialog::new()
+        .set_title("Select output folder for Tiamat build")
+        .pick_folder();
+    Ok(folder.map(|p| p.to_string_lossy().to_string()))
+}
+
+/// Start a full orchestrated run: materialize → architect → DAG phase execution.
+#[tauri::command]
+pub fn start_run(
+    app: AppHandle,
+    input_paths: Vec<String>,
+    output_dir: String,
+    max_concurrent: Option<u32>,
+    fake_cli_mode: Option<String>,
+) -> Result<crate::orchestrator::StartRunResult, String> {
+    crate::orchestrator::start_run(
+        app,
+        crate::orchestrator::StartRunRequest {
+            input_paths,
+            output_dir,
+            max_concurrent,
+            fake_cli_mode,
+        },
+    )
+}
+
+#[tauri::command]
+pub fn cancel_run(app: AppHandle) -> Result<crate::orchestrator::RunStatusSnapshot, String> {
+    crate::orchestrator::cancel_active_run(&app)
+}
+
+#[tauri::command]
+pub fn get_run_status(app: AppHandle) -> Result<crate::orchestrator::RunStatusSnapshot, String> {
+    crate::orchestrator::get_run_status(&app)
 }
 
 #[tauri::command]
@@ -1472,7 +1513,7 @@ pub fn scheduler_retry_phase(
     Ok(snap)
 }
 
-/// Reveal managed output path (opens via explorer on Windows when possible).
+/// Reveal the build output folder in the platform file manager.
 #[tauri::command]
 pub fn open_run_output(state: State<'_, AppState>) -> Result<OpenOutputResult, String> {
     let workspace = state
@@ -1484,19 +1525,29 @@ pub fn open_run_output(state: State<'_, AppState>) -> Result<OpenOutputResult, S
         return Err("no managed workspace available".into());
     };
     let path = workspace.managed_run_root.clone();
-    let opened = std::process::Command::new("explorer")
-        .arg(&path)
-        .spawn()
-        .is_ok();
+    let opened = reveal_in_file_manager(&path);
     Ok(OpenOutputResult {
         path,
         opened,
         message: if opened {
-            "Opened managed output folder".into()
+            "Opened output folder".into()
         } else {
             "Output path resolved (open deferred in this environment)".into()
         },
     })
+}
+
+/// Open a directory in the platform file manager. Best effort: a headless or
+/// minimal environment simply reports `false` rather than failing the command.
+fn reveal_in_file_manager(path: &str) -> bool {
+    let opener = if cfg!(windows) {
+        "explorer"
+    } else if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    std::process::Command::new(opener).arg(path).spawn().is_ok()
 }
 
 /// Full startup recovery scan (DB integrity, process reconcile, side effects, offer).
@@ -1878,15 +1929,37 @@ fn emit_scheduler_event(
     payload: serde_json::Value,
 ) -> Result<(), String> {
     let store = state.store.lock().map_err(|e| e.to_string())?;
-    let runs = store.list_runs().map_err(|e| e.to_string())?;
-    let Some(run) = runs.into_iter().next() else {
-        return Ok(());
+    // Prefer the active orchestrator run, then the most recent non-terminal run,
+    // then the latest run — never silently pick an arbitrary first row.
+    let run_id = {
+        let orch = state.orchestrator.lock().map_err(|e| e.to_string())?;
+        if let Some(handle) = orch.as_ref() {
+            Some(handle.run_id())
+        } else {
+            None
+        }
+    };
+    let run_id = if let Some(id) = run_id {
+        id
+    } else {
+        let runs = store.list_runs().map_err(|e| e.to_string())?;
+        let active = runs
+            .iter()
+            .rev()
+            .find(|r| !matches!(r.status.as_str(), "completed" | "failed" | "cancelled"));
+        match active.or_else(|| runs.last()) {
+            Some(r) => r.run_id,
+            None => return Ok(()),
+        }
     };
     let event = NewEvent {
         event_id: Uuid::new_v4(),
-        run_id: run.run_id,
+        run_id,
         project_id: Some("tiamat".into()),
-        phase_id: Some("P06".into()),
+        phase_id: payload
+            .get("phaseId")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
         attempt_id: None,
         process_id: None,
         event_type: event_type.into(),
@@ -2053,6 +2126,7 @@ mod tests {
             workspace_parent: Mutex::new(None),
             process_host: crate::process::ProcessHost::new(),
             abort: crate::process::AbortController::new(),
+            orchestrator: Mutex::new(None),
         };
         // Unit-test the info payload shape without Tauri State wrapper.
         let info = AppInfo {

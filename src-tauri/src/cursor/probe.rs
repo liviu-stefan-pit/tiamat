@@ -496,7 +496,10 @@ Usage: agent [options]
             normalize_model_id("cursor-grok-4.5-high - Cursor Grok 4.5"),
             "cursor-grok-4.5-high"
         );
-        assert_eq!(normalize_model_id("  gpt-5.6-sol-high  "), "gpt-5.6-sol-high");
+        assert_eq!(
+            normalize_model_id("  gpt-5.6-sol-high  "),
+            "gpt-5.6-sol-high"
+        );
         assert_eq!(
             normalize_model_id("composer-2.5 - Composer 2.5"),
             "composer-2.5"

@@ -53,11 +53,13 @@ pub fn evaluate_command_policy(
             reason: "empty command".into(),
         };
     }
-    let prog = command[0].to_ascii_lowercase();
-    let prog_name = Path::new(&prog)
+    // Matching is case-insensitive, but the path itself must stay verbatim: Unix paths
+    // are case-sensitive, so lowercasing before a containment check corrupts them.
+    let prog = command[0].as_str();
+    let prog_name = Path::new(prog)
         .file_name()
         .and_then(|s| s.to_str())
-        .unwrap_or(&prog)
+        .unwrap_or(prog)
         .to_ascii_lowercase();
 
     let joined = command.join(" ").to_ascii_lowercase();
@@ -240,7 +242,7 @@ pub fn evaluate_command_policy(
 
     // Local project tools under the working directory (managed tool root) only —
     // never accept arbitrary .exe/.cmd/.bat by extension alone.
-    if is_managed_tool_candidate(&prog, &prog_name, working_directory) {
+    if is_managed_tool_candidate(prog, &prog_name, working_directory) {
         return CommandPolicyDecision::Allow;
     }
 
@@ -251,12 +253,18 @@ pub fn evaluate_command_policy(
 
 /// Allow script/shim binaries only when resolved under the managed working directory.
 fn is_managed_tool_candidate(prog: &str, prog_name: &str, working_directory: &Path) -> bool {
+    // Unix project tooling is commonly extensionless (`./gradlew`, `bin/test`), which is
+    // the direct analogue of the `.cmd`/`.exe` shims allowed on Windows. Both are only
+    // ever accepted below, after the path is proven to sit inside the managed root.
+    let extensionless = !prog_name.contains('.');
     let allowed_ext = prog_name.ends_with(".mjs")
         || prog_name.ends_with(".js")
         || prog_name.ends_with(".ts")
         || prog_name.ends_with(".cmd")
         || prog_name.ends_with(".bat")
-        || prog_name.ends_with(".exe");
+        || prog_name.ends_with(".exe")
+        || prog_name.ends_with(".sh")
+        || extensionless;
     if !allowed_ext {
         return false;
     }
@@ -317,11 +325,13 @@ mod tests {
             evaluate_command_policy(&["cargo".into(), "test".into()], &cwd),
             CommandPolicyDecision::Allow
         );
+        // An absolute path to an allow-listed interpreter is judged on its basename.
+        #[cfg(windows)]
+        let absolute_node = r"C:\Program Files\nodejs\node.exe";
+        #[cfg(not(windows))]
+        let absolute_node = "/usr/local/bin/node";
         assert_eq!(
-            evaluate_command_policy(
-                &[r"C:\Program Files\nodejs\node.exe".into(), "-v".into()],
-                &cwd
-            ),
+            evaluate_command_policy(&[absolute_node.into(), "-v".into()], &cwd),
             CommandPolicyDecision::Allow
         );
     }
@@ -358,11 +368,12 @@ mod tests {
             CommandPolicyDecision::Allow
         );
         // Outside managed working directory remains denied.
+        #[cfg(windows)]
+        let outside = r"C:\other\node_modules\.bin\custom-tool.cmd";
+        #[cfg(not(windows))]
+        let outside = "/other/node_modules/.bin/custom-tool.cmd";
         assert!(matches!(
-            evaluate_command_policy(
-                &[r"C:\other\node_modules\.bin\custom-tool.cmd".into()],
-                &cwd
-            ),
+            evaluate_command_policy(&[outside.into()], &cwd),
             CommandPolicyDecision::Deny { .. }
         ));
     }

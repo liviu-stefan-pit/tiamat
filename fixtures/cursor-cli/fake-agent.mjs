@@ -5,7 +5,7 @@
  * Never contacts a live Cursor service or paid model.
  */
 import { spawn } from "node:child_process";
-import { mkdirSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, existsSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -13,8 +13,27 @@ const mode = (process.env.TIAMAT_FAKE_CLI_MODE || "success").toLowerCase();
 const args = process.argv.slice(2);
 const arg0 = (args[0] || "").toLowerCase();
 
+/**
+ * Write synchronously to the underlying fd.
+ *
+ * On Unix, `stream.write` to a pipe is asynchronous, so the `process.exit()`
+ * calls throughout this fixture would discard buffered output — silently
+ * truncating large payloads such as the `flood_oversized` mode. Writing to the
+ * fd directly keeps every mode's output intact on all platforms.
+ */
 function write(stream, text) {
-  stream.write(text);
+  const fd = stream === process.stderr ? 2 : 1;
+  const buffer = Buffer.from(text, "utf8");
+  let offset = 0;
+  while (offset < buffer.length) {
+    try {
+      offset += writeSync(fd, buffer, offset, buffer.length - offset);
+    } catch (err) {
+      if (err.code === "EAGAIN") continue;
+      if (err.code === "EPIPE") return;
+      throw err;
+    }
+  }
 }
 
 function streamSuccess(chatId = "chat-fake-001") {
@@ -179,7 +198,7 @@ function streamArchitectPlan(plan, chatId) {
       type: "system",
       subtype: "init",
       session_id: chatId,
-      model: process.env.TIAMAT_FAKE_PLAN_MODEL || "gpt-5.6-sol-high",
+      model: process.env.TIAMAT_FAKE_PLAN_MODEL || "cursor-grok-4.5-high",
     }) + "\n",
   );
   write(

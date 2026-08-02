@@ -521,7 +521,7 @@ pub fn complete_attempt(
             &phase.model_tier,
             &last_selected,
             phase.attempt_count,
-            4,
+            crate::scheduler::types::DEFAULT_MAX_ATTEMPTS,
             failure_kind.unwrap_or(FailureKind::Other),
             progress_useful,
             attempt.selection_reason.contains("same-tier resume"),

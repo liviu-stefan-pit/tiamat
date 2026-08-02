@@ -4,6 +4,7 @@ pub mod cursor;
 pub mod db;
 pub mod executor;
 pub mod intake;
+pub mod orchestrator;
 pub mod packaging;
 pub mod planner;
 pub mod process;
@@ -114,6 +115,13 @@ pub fn run() {
             // Tray fallback for emergency stop when shortcut is degraded or window unfocused.
             let tray_ok = setup_tray(app.handle()).is_ok();
             let recovery_for_state = recovery.clone();
+            let process_host = crate::process::ProcessHost::new();
+            {
+                let handle = app.handle().clone();
+                process_host.set_event_sink(std::sync::Arc::new(move |envelope| {
+                    let _ = handle.emit(commands::EVENT_CHANNEL, &envelope);
+                }));
+            }
             app.manage(AppState {
                 store: Mutex::new(store),
                 last_preflight: Mutex::new(None),
@@ -125,12 +133,13 @@ pub fn run() {
                 last_executor: Mutex::new(None),
                 last_recovery: Mutex::new(Some(recovery_for_state)),
                 workspace_parent: Mutex::new(None),
-                process_host: crate::process::ProcessHost::new(),
+                process_host,
                 abort: {
                     let ctrl = crate::process::AbortController::new();
                     ctrl.set_tray_available(tray_ok);
                     ctrl
                 },
+                orchestrator: Mutex::new(None),
             });
             Ok(())
         })
@@ -169,6 +178,7 @@ pub fn run() {
             commands::list_artifacts,
             commands::transition_run_status,
             commands::pick_intake_paths,
+            commands::pick_output_dir,
             commands::run_intake_preflight,
             commands::confirm_intake_trust,
             commands::get_intake_preflight,
@@ -186,6 +196,9 @@ pub fn run() {
             commands::get_project_plan,
             commands::get_graph_projection,
             commands::get_architect_result,
+            commands::start_run,
+            commands::cancel_run,
+            commands::get_run_status,
             commands::start_scheduler,
             commands::scheduler_tick,
             commands::scheduler_complete_attempt,

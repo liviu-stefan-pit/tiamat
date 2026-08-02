@@ -307,10 +307,7 @@ mod tests {
             .argv
             .windows(2)
             .any(|w| w == ["--model", "cursor-grok-4.5-high"]));
-        assert!(!built
-            .argv
-            .iter()
-            .any(|a| a.contains("Cursor Grok")));
+        assert!(!built.argv.iter().any(|a| a.contains("Cursor Grok")));
     }
 
     #[test]

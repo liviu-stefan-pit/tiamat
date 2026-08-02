@@ -9,7 +9,7 @@ Tiamat v1 runs in **Normal mode**. Read this before trusting unattended runs aga
 | Owned clones/copies | Agents write only to managed roots; sources are withheld |
 | Minimal environment | Controlled env for spawned processes |
 | Non-elevated token | No elevation; restricted user rights |
-| Windows Job Objects | Kill-on-close, breakaway disabled, process limits |
+| Windows Job Objects / Unix process groups | Kill-on-close (Windows) or process-group signals (Linux); breakaway disabled on Windows |
 | Command policy | Allow/deny lists for destructive and out-of-root actions |
 | Post-run verification | Source fingerprints + git status must remain unchanged |
 
@@ -17,7 +17,7 @@ Tiamat v1 runs in **Normal mode**. Read this before trusting unattended runs aga
 
 - Prompt/command policy is **advisory** for Cursor invocations that use `--force`, because Cursor's internal tools can still act inside the trusted workspace.
 - These controls protect against mistakes and ordinary agent behavior.
-- They are **not** a security boundary against deliberately hostile native code, elevated breakaways, or OS escape mechanisms outside the supported worker contract.
+- They are **not** a security boundary against deliberately hostile native code, elevated breakaways, Linux `setsid()` escape from process groups, or OS escape mechanisms outside the supported worker contract.
 - Package lifecycle scripts and project tests are untrusted executable code.
 
 ## Hostile inputs

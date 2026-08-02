@@ -1,8 +1,9 @@
 //! Process host: spawn into Job Object, watchdog, graceful/forced stop, drain/reap.
 
 use std::collections::HashMap;
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -24,6 +25,10 @@ use super::types::{
     WatchdogConfig,
 };
 
+/// Callback invoked after a process/watchdog event is durably written so the UI
+/// can receive it live on `tiamat://events`.
+pub type EventSink = Arc<dyn Fn(tiamat_contracts::EventEnvelope) + Send + Sync>;
+
 /// In-memory live handle paired with a durable registry row.
 struct LiveProcess {
     #[allow(dead_code)]
@@ -36,6 +41,7 @@ struct LiveProcess {
 
 pub struct ProcessHost {
     lives: Mutex<HashMap<Uuid, LiveProcess>>,
+    event_sink: Mutex<Option<EventSink>>,
 }
 
 /// Borrowed ProcessHost + Store for production Cursor/agent/verification spawns.
@@ -54,6 +60,22 @@ impl ProcessHost {
     pub fn new() -> Self {
         Self {
             lives: Mutex::new(HashMap::new()),
+            event_sink: Mutex::new(None),
+        }
+    }
+
+    /// Register a live event sink (typically a Tauri `AppHandle::emit` closure).
+    pub fn set_event_sink(&self, sink: EventSink) {
+        if let Ok(mut guard) = self.event_sink.lock() {
+            *guard = Some(sink);
+        }
+    }
+
+    fn emit_live(&self, envelope: &tiamat_contracts::EventEnvelope) {
+        if let Ok(guard) = self.event_sink.lock() {
+            if let Some(sink) = guard.as_ref() {
+                sink(envelope.clone());
+            }
         }
     }
 
@@ -102,6 +124,7 @@ impl ProcessHost {
         };
         store.upsert_process(&record)?;
         emit_process_event(
+            self,
             store,
             &record,
             "process.registered",
@@ -140,6 +163,7 @@ impl ProcessHost {
         });
         store.upsert_process(&record)?;
         emit_process_event(
+            self,
             store,
             &record,
             "process.spawned",
@@ -152,6 +176,7 @@ impl ProcessHost {
         )?;
         if spawned.degraded_association {
             emit_process_event(
+                self,
                 store,
                 &record,
                 "process.association_degraded",
@@ -163,6 +188,7 @@ impl ProcessHost {
         record.state = ProcessState::Active;
         store.upsert_process(&record)?;
         emit_process_event(
+            self,
             store,
             &record,
             "process.active",
@@ -225,7 +251,8 @@ impl ProcessHost {
 
         let mut outcome = outcome?;
         if let Some(live) = live {
-            let (cleanup_ok, active_after, proof) = finalize_cleanup(
+            let (cleanup_ok, active_after, proof, cleanup_warning) = finalize_cleanup(
+                self,
                 store,
                 &record,
                 &live.spawned,
@@ -234,6 +261,7 @@ impl ProcessHost {
             outcome.cleanup_ok = cleanup_ok;
             outcome.zero_survivors = active_after == 0;
             outcome.active_after_cleanup = active_after;
+            outcome.cleanup_warning = cleanup_warning;
             record.cleanup_evidence = json!({
                 "proofId": proof.proof_id,
                 "activeAfter": active_after,
@@ -244,6 +272,7 @@ impl ProcessHost {
             record.exit_code = outcome.exit_code;
             store.upsert_process(&record)?;
             emit_process_event(
+                self,
                 store,
                 &record,
                 "cleanup.proof",
@@ -342,35 +371,31 @@ impl ProcessHost {
         let stderr_buf = Arc::new(Mutex::new(String::new()));
         let stdout_done = Arc::new(AtomicBool::new(false));
         let stderr_done = Arc::new(AtomicBool::new(false));
+        let (line_tx, line_rx) = mpsc::channel::<(String, String)>();
 
-        if let Some(mut out) = stdout {
+        if let Some(out) = stdout {
             let buf = stdout_buf.clone();
             let done = stdout_done.clone();
+            let tx = line_tx.clone();
             thread::spawn(move || {
-                let mut bytes = Vec::new();
-                let _ = out.read_to_end(&mut bytes);
-                if let Ok(mut g) = buf.lock() {
-                    *g = String::from_utf8_lossy(&bytes).into_owned();
-                }
+                stream_lines(out, "stdout", &buf, &tx);
                 done.store(true, Ordering::SeqCst);
             });
         } else {
             stdout_done.store(true, Ordering::SeqCst);
         }
-        if let Some(mut err) = stderr {
+        if let Some(err) = stderr {
             let buf = stderr_buf.clone();
             let done = stderr_done.clone();
+            let tx = line_tx.clone();
             thread::spawn(move || {
-                let mut bytes = Vec::new();
-                let _ = err.read_to_end(&mut bytes);
-                if let Ok(mut g) = buf.lock() {
-                    *g = String::from_utf8_lossy(&bytes).into_owned();
-                }
+                stream_lines(err, "stderr", &buf, &tx);
                 done.store(true, Ordering::SeqCst);
             });
         } else {
             stderr_done.store(true, Ordering::SeqCst);
         }
+        drop(line_tx);
 
         let mut warned = false;
         let mut graceful_requested = false;
@@ -380,6 +405,24 @@ impl ProcessHost {
         let mut exit_code = None;
 
         loop {
+            // Forward streamed agent lines to the durable event log + live sink.
+            while let Ok((stream, line)) = line_rx.try_recv() {
+                let redacted = redact_line(&line);
+                let event_type = if stream == "stderr" {
+                    "agent.stderr"
+                } else {
+                    "agent.stdout"
+                };
+                let _ = emit_process_event(
+                    self,
+                    store,
+                    record,
+                    event_type,
+                    &redacted,
+                    json!({ "stream": stream }),
+                );
+            }
+
             if force.load(Ordering::SeqCst) {
                 killed = true;
                 cancelled = true;
@@ -397,6 +440,7 @@ impl ProcessHost {
                 record.terminal_reason = Some("cancelled".into());
                 let _ = store.upsert_process(record);
                 let _ = emit_process_event(
+                    self,
                     store,
                     record,
                     "process.graceful_stop",
@@ -430,6 +474,7 @@ impl ProcessHost {
             if !warned && elapsed >= watchdog.warn_after_ms {
                 warned = true;
                 let _ = emit_process_event(
+                    self,
                     store,
                     record,
                     "watchdog.warning",
@@ -437,6 +482,7 @@ impl ProcessHost {
                     json!({ "elapsedMs": elapsed, "warnAfterMs": watchdog.warn_after_ms }),
                 );
                 let _ = emit_process_event(
+                    self,
                     store,
                     record,
                     "attempt.warning",
@@ -452,6 +498,7 @@ impl ProcessHost {
                 record.terminal_reason = Some("timed_out".into());
                 let _ = store.upsert_process(record);
                 let _ = emit_process_event(
+                    self,
                     store,
                     record,
                     "watchdog.graceful_stop",
@@ -472,6 +519,7 @@ impl ProcessHost {
                     record.state = ProcessState::ForcedStop;
                     let _ = store.upsert_process(record);
                     let _ = emit_process_event(
+                        self,
                         store,
                         record,
                         "watchdog.forced_stop",
@@ -555,6 +603,7 @@ impl ProcessHost {
             record.chat_id = chat_id.clone();
             let _ = store.upsert_process(record);
             let _ = emit_process_event(
+                self,
                 store,
                 record,
                 "watchdog.timeout_resume",
@@ -577,6 +626,9 @@ impl ProcessHost {
             cleanup_ok: false,
             zero_survivors: false,
             active_after_cleanup: u32::MAX,
+            truncated: stdout_limited.truncated || stderr_limited.truncated,
+            flood_detected: stdout_limited.flood_detected || stderr_limited.flood_detected,
+            cleanup_warning: None,
         })
     }
 }
@@ -590,11 +642,12 @@ fn force_terminate_live(host: &ProcessHost, process_id: Uuid) {
 }
 
 fn finalize_cleanup(
+    host: &ProcessHost,
     store: &Store,
     record: &ProcessRecord,
     spawned: &SpawnedInJob,
     _was_stopped: bool,
-) -> ProcessResult<(bool, u32, CleanupProof)> {
+) -> ProcessResult<(bool, u32, CleanupProof, Option<String>)> {
     // Observe active count WHILE job handle is still open.
     let active = spawned.job.active_process_count().unwrap_or(u32::MAX);
     if active > 0 {
@@ -603,6 +656,15 @@ fn finalize_cleanup(
     }
     let active_after = spawned.job.active_process_count().unwrap_or(u32::MAX);
     let zero = active_after == 0;
+    let cleanup_warning = if active == u32::MAX {
+        Some("process tree size could not be observed before teardown".to_string())
+    } else if active > 0 {
+        Some(format!(
+            "{active} process(es) still running at teardown; forced termination was required"
+        ))
+    } else {
+        None
+    };
     let proof = CleanupProof {
         proof_id: Uuid::new_v4(),
         run_id: record.run_id,
@@ -645,6 +707,7 @@ fn finalize_cleanup(
     store.insert_cleanup_proof(&proof_closed)?;
 
     let _ = emit_process_event(
+        host,
         store,
         record,
         if zero {
@@ -660,7 +723,7 @@ fn finalize_cleanup(
         json!({ "active": active_after }),
     );
 
-    Ok((zero, active_after, proof_closed))
+    Ok((zero, active_after, proof_closed, cleanup_warning))
 }
 
 fn identity_checked_taskkill(pid: u32, creation_time_100ns: u64, executable_identity: &str) {
@@ -679,6 +742,24 @@ fn identity_checked_taskkill(pid: u32, creation_time_100ns: u64, executable_iden
     }
 }
 
+fn stream_lines(
+    reader: Box<dyn Read + Send>,
+    stream: &str,
+    buf: &Arc<Mutex<String>>,
+    tx: &mpsc::Sender<(String, String)>,
+) {
+    for line in BufReader::new(reader).lines() {
+        let Ok(line) = line else {
+            break;
+        };
+        if let Ok(mut g) = buf.lock() {
+            g.push_str(&line);
+            g.push('\n');
+        }
+        let _ = tx.send((stream.to_string(), line));
+    }
+}
+
 fn extract_chat_id_heuristic(stdout: &str) -> Option<String> {
     for line in stdout.lines() {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
@@ -694,6 +775,7 @@ fn extract_chat_id_heuristic(stdout: &str) -> Option<String> {
 }
 
 fn emit_process_event(
+    host: &ProcessHost,
     store: &Store,
     record: &ProcessRecord,
     event_type: &str,
@@ -705,7 +787,7 @@ fn emit_process_event(
     } else {
         EventLevel::Info
     };
-    let _ = store.append_event_atomic(
+    let envelope = store.append_event_atomic(
         None,
         NewEvent {
             event_id: Uuid::new_v4(),
@@ -721,6 +803,8 @@ fn emit_process_event(
             payload,
         },
     )?;
+    let _ = store.mark_outbox_delivered(&[envelope.event_id]);
+    host.emit_live(&envelope);
     Ok(())
 }
 
@@ -742,6 +826,10 @@ pub fn run_capture_hosted(
         } else {
             outcome.duration_ms
         },
+        truncated: outcome.truncated,
+        flood_detected: outcome.flood_detected,
+        cleanup_ok: outcome.cleanup_ok,
+        cleanup_warning: outcome.cleanup_warning,
     })
 }
 

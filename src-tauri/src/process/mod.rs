@@ -16,8 +16,8 @@ pub use abort::{
 };
 pub use error::{ProcessError, ProcessResult};
 pub use host::{
-    run_argv_hosted_for_tests, run_capture_hosted, watchdog_for_timeout, HostedSpawnContext,
-    ProcessHost,
+    run_argv_hosted_for_tests, run_capture_hosted, watchdog_for_timeout, EventSink,
+    HostedSpawnContext, ProcessHost,
 };
 pub use reconcile::reconcile_owned_processes;
 pub use spawn::{

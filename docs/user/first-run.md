@@ -4,50 +4,45 @@ This guide takes a new user from a fresh install through a safe TestBench journe
 
 ## 1. Confirm Cursor CLI
 
-1. Open **Settings** (header control).
-2. Set **Cursor CLI path** if auto-discovery fails. For deterministic practice without paid models, point at the repo fake agent:
-   - `fixtures/cursor-cli/fake-agent.cmd` (dev checkout)
-3. Click **Save**, then confirm status shows **available**.
-4. Note the emergency-stop shortcut (default `Ctrl+Shift+F12`).
+Tiamat probes for the Cursor agent CLI on PATH. For deterministic practice without paid models, set `TIAMAT_CURSOR_CLI` / configure the fake agent:
 
-Real Cursor: install Cursor and ensure `agent` is on PATH or configure the full executable path. Authentication must succeed before Start is enabled for live runs.
+- `fixtures/cursor-cli/fake-agent.mjs` (cross-platform; wrap with `node|…` where required)
+- Windows convenience wrapper: `fixtures/cursor-cli/fake-agent.cmd`
+
+Real Cursor: install Cursor and ensure `agent` is on PATH. Authentication must succeed before live runs.
 
 ## 2. Materialize TestBench (dev / packaged acceptance)
 
 From a repository checkout:
 
-```powershell
+```bash
 npm run testbench:materialize
 ```
 
 Use `fixtures/testbench/executor-app` as the intake folder for the first journey.
 
-## 3. Intake → trust → Start
+## 3. Input → trust → output → Run
 
-1. Drop or paste the absolute path to `executor-app` into the intake field.
-2. Click **Analyze**.
-3. Review the preflight card: projects, languages, warnings, disk estimate, Cursor status.
-4. Check both trust boxes:
-   - acknowledge untrusted content
-   - acknowledge execution risk (build/test code runs with your non-elevated account)
-5. Click **Start implementation**.
+1. Drop or paste the absolute path to `executor-app` into **Input**.
+2. Review preflight summary: projects, blockers, warnings.
+3. Acknowledge the single trust checkbox when required.
+4. Choose an **Output** folder (build root; Tiamat creates `run-{id}/` under it).
+5. Click **Run**.
 
-You should see the read-only phase graph and the activity log populate.
+Watch the live **Log** for architect / phase / process events. Use **Stop** to cancel.
 
 ## 4. Deterministic full demo (no paid models)
 
-```powershell
+```bash
 npm run demo
 ```
 
-Runs the fake-CLI full story: unit/integration/E2E gates and process-cleanup proof.
+Runs the fake-CLI full story: unit/integration/E2E gates and process-cleanup proof (Windows helpers where noted).
 
 ## 5. What success looks like
 
-- Graph shows phases progressing to `passed` / terminal states.
-- Activity log shows redacted structured events.
-- Isolated workspace panel shows managed roots and **Source fingerprints: unchanged**.
-- Completion summary lists tests, promotion instructions, and cleanup confirmation.
+- Log shows architect plan compile then phase progress to terminal states.
+- Output folder contains the managed `run-*` workspace.
 - Process registry reports empty after stop.
 
 ## Next

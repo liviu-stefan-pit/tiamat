@@ -62,7 +62,40 @@ pub fn query_identity(pid: u32) -> ProcessResult<ProcessIdentity> {
     }
 }
 
-#[cfg(not(windows))]
+/// Unix identity: PID plus the kernel's start time, which makes a recycled PID
+/// distinguishable from the original process.
+#[cfg(unix)]
+pub fn query_identity(pid: u32) -> ProcessResult<ProcessIdentity> {
+    let creation_time_100ns = query_start_time(pid).ok_or_else(|| {
+        ProcessError::Identity(format!("could not read /proc/{pid}/stat for identity"))
+    })?;
+    let executable_path = std::fs::read_link(format!("/proc/{pid}/exe"))
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    Ok(ProcessIdentity {
+        pid,
+        creation_time_100ns,
+        executable_path,
+    })
+}
+
+/// Process start time in clock ticks since boot (field 22 of `/proc/<pid>/stat`).
+/// Used as the creation-time discriminator; the unit differs from Windows but the
+/// only requirement is that it is stable per process and differs across PID reuse.
+#[cfg(unix)]
+pub fn query_start_time(pid: u32) -> Option<u64> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // The comm field is parenthesised and may contain spaces, so split after the last ')'.
+    let (_, rest) = stat.rsplit_once(") ")?;
+    rest.split_whitespace().nth(19)?.parse::<u64>().ok()
+}
+
+#[cfg(not(unix))]
+pub fn query_start_time(_pid: u32) -> Option<u64> {
+    None
+}
+
+#[cfg(not(any(windows, unix)))]
 pub fn query_identity(pid: u32) -> ProcessResult<ProcessIdentity> {
     Err(ProcessError::Unsupported(format!(
         "process identity query unsupported for pid {pid}"
@@ -75,12 +108,16 @@ pub fn identities_match(expected: &ProcessIdentity, observed: &ProcessIdentity) 
         && paths_equivalent(&expected.executable_path, &observed.executable_path)
 }
 
+/// Windows paths are case-insensitive and separator-agnostic; Unix paths are neither.
 fn paths_equivalent(a: &str, b: &str) -> bool {
+    #[cfg(windows)]
     let norm = |s: &str| {
         s.replace('/', "\\")
             .trim_end_matches('\\')
             .to_ascii_lowercase()
     };
+    #[cfg(not(windows))]
+    let norm = |s: &str| s.trim_end_matches('/').to_string();
     norm(a) == norm(b)
 }
 
@@ -106,11 +143,28 @@ pub fn verify_live(
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
     #[test]
     fn path_equivalence_is_case_insensitive() {
         assert!(paths_equivalent(
             r"C:\Program Files\App\agent.exe",
             r"c:\program files\app\agent.exe"
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_equivalence_is_case_sensitive_on_unix() {
+        assert!(paths_equivalent("/usr/bin/agent", "/usr/bin/agent/"));
+        assert!(!paths_equivalent("/usr/bin/Agent", "/usr/bin/agent"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn start_time_is_stable_for_current_process() {
+        let pid = std::process::id();
+        let first = query_start_time(pid).expect("own start time readable");
+        let second = query_start_time(pid).expect("own start time readable");
+        assert_eq!(first, second);
     }
 }

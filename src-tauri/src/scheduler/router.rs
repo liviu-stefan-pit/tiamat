@@ -1,13 +1,13 @@
-use crate::cursor::CursorModelInfo;
+use crate::cursor::{filter_allowed_cursor_models, is_allowed_cursor_model, CursorModelInfo};
 use crate::scheduler::error::{SchedulerError, SchedulerResult};
 use crate::scheduler::types::{
-    escalate_tier, model_tier_str, preferred_model_for_tier, tier_rank, FailureKind,
-    ModelSelection, MODEL_SOL,
+    escalate_tier, model_tier_str, preferred_model_for_tier, tier_rank, FailureKind, ModelSelection,
 };
 use tiamat_contracts::ModelTier;
 
 /// Resolve an implementation/review model from the requested tier and runtime availability.
-/// Never routes implementation/review to SOL. Final independent reviews stay at Grok High.
+/// Only Composer and Grok (all efforts) are allowed — never SOL or other families.
+/// Tiny/mechanical phases request Composer; everything else uses Grok tiers with escalation.
 pub fn route_model(
     requested_tier: &ModelTier,
     available: &[CursorModelInfo],
@@ -17,10 +17,11 @@ pub fn route_model(
     allow_downgrade: bool,
     same_tier_resume: bool,
 ) -> SchedulerResult<ModelSelection> {
-    let available_ids: Vec<String> = available.iter().map(|m| m.id.clone()).collect();
-    if available_ids.iter().any(|id| is_sol_id(id)) && available_ids.len() == 1 {
+    let allowed = filter_allowed_cursor_models(available);
+    let available_ids: Vec<String> = allowed.iter().map(|m| m.id.clone()).collect();
+    if available_ids.is_empty() {
         return Err(SchedulerError::Routing(
-            "only SOL is available; implementation/review cannot use SOL".into(),
+            "no Composer/Grok models available; SOL and other families are not used".into(),
         ));
     }
 
@@ -71,10 +72,10 @@ pub fn route_model(
             )
         };
 
-        if is_sol_id(&selected) {
-            return Err(SchedulerError::Routing(
-                "refusing to route implementation/review to SOL".into(),
-            ));
+        if !is_allowed_cursor_model(&selected) {
+            return Err(SchedulerError::Routing(format!(
+                "refusing to route implementation/review to non-Cursor model {selected}"
+            )));
         }
 
         return Ok(ModelSelection {
@@ -95,7 +96,7 @@ pub fn route_model(
         escalated = true;
         let preferred_next = preferred_model_for_tier(&probe);
         if let Some(selected) = pick_available(preferred_next, &available_ids, &probe) {
-            if is_sol_id(&selected) {
+            if !is_allowed_cursor_model(&selected) {
                 continue;
             }
             return Ok(ModelSelection {
@@ -119,17 +120,12 @@ pub fn route_model(
     )))
 }
 
-fn is_sol_id(id: &str) -> bool {
-    let lower = id.to_ascii_lowercase();
-    lower.contains("sol") || id == MODEL_SOL
-}
-
 fn pick_available(preferred: &str, available: &[String], tier: &ModelTier) -> Option<String> {
     if available.iter().any(|m| m == preferred) {
         return Some(preferred.to_string());
     }
 
-    // Deterministic family/tier fallbacks — never guess unrelated models / never SOL.
+    // Deterministic family/tier fallbacks — Composer/Grok only.
     let candidates: &[&str] = match tier {
         ModelTier::Composer => &["composer-2.5", "composer-2", "composer"],
         ModelTier::GrokLow => &["cursor-grok-4.5-low", "grok-low"],
@@ -148,7 +144,7 @@ fn pick_available(preferred: &str, available: &[String], tier: &ModelTier) -> Op
         .iter()
         .find(|m| {
             let lower = m.to_ascii_lowercase();
-            if is_sol_id(m) || lower.contains("fast") {
+            if !is_allowed_cursor_model(m) {
                 return false;
             }
             match tier {
@@ -271,7 +267,10 @@ mod tests {
             false,
         )
         .unwrap_err();
-        assert!(err.to_string().contains("SOL"));
+        assert!(
+            err.to_string().contains("Composer/Grok") || err.to_string().contains("SOL"),
+            "{err}"
+        );
     }
 
     #[test]

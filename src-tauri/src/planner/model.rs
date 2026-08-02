@@ -1,13 +1,12 @@
-use crate::cursor::CursorModelInfo;
-use crate::planner::types::{
-    ArchitectModelSelection, ARCHITECT_FALLBACK_MODEL, ARCHITECT_PREFERRED_MODEL,
-};
+use crate::cursor::{filter_allowed_cursor_models, CursorModelInfo};
+use crate::planner::types::{ArchitectModelSelection, ARCHITECT_PREFERRED_MODEL};
 
-/// Select SOL for architecture when available; otherwise Grok High degraded mode.
+/// Architect always uses Cursor Grok High (never SOL or other families).
 pub fn select_architect_model(
     models: &[CursorModelInfo],
 ) -> Result<ArchitectModelSelection, String> {
-    let available: Vec<String> = models.iter().map(|m| m.id.clone()).collect();
+    let allowed = filter_allowed_cursor_models(models);
+    let available: Vec<String> = allowed.iter().map(|m| m.id.clone()).collect();
     let has = |id: &str| available.iter().any(|m| m == id);
 
     if has(ARCHITECT_PREFERRED_MODEL) {
@@ -15,19 +14,7 @@ pub fn select_architect_model(
             requested_model: ARCHITECT_PREFERRED_MODEL.into(),
             selected_model: ARCHITECT_PREFERRED_MODEL.into(),
             degraded: false,
-            reason: "preferred SOL architect model available".into(),
-            available_models: available,
-        });
-    }
-
-    if has(ARCHITECT_FALLBACK_MODEL) {
-        return Ok(ArchitectModelSelection {
-            requested_model: ARCHITECT_PREFERRED_MODEL.into(),
-            selected_model: ARCHITECT_FALLBACK_MODEL.into(),
-            degraded: true,
-            reason: format!(
-                "{ARCHITECT_PREFERRED_MODEL} unavailable; using {ARCHITECT_FALLBACK_MODEL} degraded mode"
-            ),
+            reason: "preferred Cursor Grok High architect model available".into(),
             available_models: available,
         });
     }
@@ -49,13 +36,14 @@ pub fn select_architect_model(
     }
 
     Err(format!(
-        "no allowed architect model: need {ARCHITECT_PREFERRED_MODEL} or {ARCHITECT_FALLBACK_MODEL}; available={available:?}"
+        "no allowed architect model: need {ARCHITECT_PREFERRED_MODEL} (Cursor Grok High); available={available:?}"
     ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::planner::types::ARCHITECT_FALLBACK_MODEL;
 
     fn model(id: &str) -> CursorModelInfo {
         CursorModelInfo {
@@ -65,35 +53,27 @@ mod tests {
     }
 
     #[test]
-    fn prefers_sol_when_available() {
+    fn prefers_grok_high_and_ignores_sol() {
         let sel = select_architect_model(&[
             model("composer-2.5"),
+            model("gpt-5.6-sol-high"),
             model(ARCHITECT_PREFERRED_MODEL),
-            model(ARCHITECT_FALLBACK_MODEL),
         ])
         .unwrap();
         assert_eq!(sel.selected_model, ARCHITECT_PREFERRED_MODEL);
         assert!(!sel.degraded);
+        assert!(!sel.available_models.iter().any(|id| id.contains("sol")));
     }
 
     #[test]
-    fn falls_back_to_grok_high_and_records_degraded() {
-        let sel = select_architect_model(&[model("composer-2.5"), model(ARCHITECT_FALLBACK_MODEL)])
-            .unwrap();
-        assert_eq!(sel.selected_model, ARCHITECT_FALLBACK_MODEL);
-        assert!(sel.degraded);
-        assert_eq!(sel.requested_model, ARCHITECT_PREFERRED_MODEL);
-    }
-
-    #[test]
-    fn fails_when_no_allowed_high_tier() {
+    fn fails_when_no_grok_high() {
         let err = select_architect_model(&[model("composer-2.5"), model("cursor-grok-4.5-medium")])
             .unwrap_err();
         assert!(err.contains("no allowed architect model"));
     }
 
     #[test]
-    fn prefers_sol_from_parsed_display_line_catalog() {
+    fn accepts_fuzzy_grok_high_label() {
         let catalog = crate::cursor::parse_models_output(
             "\
 cursor-grok-4.5-high - Cursor Grok 4.5
@@ -104,9 +84,7 @@ composer-2.5 - Composer 2.5
         let sel = select_architect_model(&catalog).unwrap();
         assert_eq!(sel.selected_model, ARCHITECT_PREFERRED_MODEL);
         assert!(!sel.degraded);
-        assert!(sel
-            .available_models
-            .iter()
-            .all(|id| !id.contains(" - ")));
+        assert!(sel.available_models.iter().all(|id| !id.contains(" - ")));
+        assert_eq!(ARCHITECT_FALLBACK_MODEL, ARCHITECT_PREFERRED_MODEL);
     }
 }
