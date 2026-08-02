@@ -54,7 +54,8 @@ test("trust + output unlock Run without leaking secrets", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByTestId("start-run")).toBeDisabled();
 
-  await page.getByTestId("intake-path-input").fill("C:\\fixture\\secret-nested");
+  // Keep the path secret-tagged but avoid "nested" so the summary stays compact.
+  await page.getByTestId("intake-path-input").fill("C:\\fixture\\secret-project");
   await page.getByRole("button", { name: "Add" }).click();
   await expect(page.getByTestId("preflight-summary")).toBeVisible();
   await expect(page.getByTestId("start-run")).toBeDisabled();
@@ -63,7 +64,11 @@ test("trust + output unlock Run without leaking secrets", async ({ page }) => {
   expect(bodyText).not.toContain("AKIAIOSFODNN7EXAMPLE");
   expect(bodyText).not.toContain("fixture-secret-value");
 
-  await page.getByTestId("trust-ack").locator("input").check();
+  const trust = page.getByTestId("trust-ack");
+  await expect(trust).toBeVisible();
+  const trustBox = trust.locator("input[type='checkbox']");
+  await trustBox.check();
+  await expect(trustBox).toBeChecked();
   await page.getByTestId("output-path-input").fill("C:\\fixture\\output");
   await page.getByRole("button", { name: "Set" }).click();
   await expect(page.getByTestId("start-run")).toBeEnabled();

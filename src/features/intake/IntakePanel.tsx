@@ -97,6 +97,10 @@ export function IntakePanel({
     (!report.trust.acknowledgedUntrusted ||
       !report.trust.acknowledgedExecutionRisk);
   const hasBlockers = (report?.blockers.length ?? 0) > 0;
+  const trustConfirmed = Boolean(report?.trust.confirmed);
+  // Keep the control mounted after ack so the checked state stays visible (and so
+  // automation is not left asserting against a detached checkbox).
+  const showTrust = !!report && !hasBlockers && (needsTrust || trustConfirmed);
 
   return (
     <section className="pane" data-testid="intake-panel">
@@ -187,13 +191,13 @@ export function IntakePanel({
               ))}
             </ul>
           )}
-          {needsTrust && !hasBlockers && (
+          {showTrust && (
             <label className="trust-ack" data-testid="trust-ack">
               <input
                 type="checkbox"
-                checked={trustAck}
+                checked={trustConfirmed || trustAck}
                 onChange={(e) => void onTrustToggle(e.target.checked)}
-                disabled={busy}
+                disabled={busy || trustConfirmed}
               />
               I understand these sources will be read and agents will run
               commands in the output folder.

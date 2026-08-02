@@ -136,7 +136,9 @@ button:disabled {
   cursor: not-allowed;
 }
 
-input,
+/* Text fields only — checkboxes must not inherit flex:1/min-width:0 or they
+   collapse to a zero-width box beside long label copy (Playwright "not visible"). */
+input:not([type="checkbox"]):not([type="radio"]),
 select {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -144,6 +146,17 @@ select {
   background: white;
   min-width: 0;
   flex: 1;
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  flex: none;
+  width: 1.05rem;
+  height: 1.05rem;
+  min-width: 1.05rem;
+  margin: 0.15rem 0 0;
+  padding: 0;
+  accent-color: var(--accent);
 }
 
 .path-list,
@@ -166,6 +179,11 @@ select {
   align-items: flex-start;
   margin-top: 0.75rem;
   font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.trust-ack input {
+  flex: none;
 }
 
 .output-current {
