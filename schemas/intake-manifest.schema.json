@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tiamat.local/schemas/intake-manifest.schema.json",
+  "title": "IntakeManifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "intakeId",
+    "sources",
+    "projects",
+    "inventoryArtifact"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "const": 1
+    },
+    "intakeId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "kind", "readOnly"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "kind": { "type": "string", "enum": ["file", "folder"] },
+          "readOnly": { "type": "boolean" }
+        }
+      }
+    },
+    "projects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "projectId",
+          "root",
+          "kind",
+          "languages",
+          "buildSystems",
+          "testCommands",
+          "warnings"
+        ],
+        "properties": {
+          "projectId": { "type": "string", "minLength": 1 },
+          "root": { "type": "string", "minLength": 1 },
+          "kind": { "type": "string", "enum": ["git", "folder", "notes"] },
+          "languages": { "type": "array", "items": { "type": "string" } },
+          "buildSystems": { "type": "array", "items": { "type": "string" } },
+          "testCommands": { "type": "array", "items": { "type": "string" } },
+          "warnings": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "inventoryArtifact": { "type": "string", "minLength": 1 }
+  }
+}

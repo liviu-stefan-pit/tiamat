@@ -1,0 +1,52 @@
+{
+  "name": "tiamat",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "test": "npm run test:rust && npm run test:frontend && npm run test:contracts",
+    "test:rust": "cargo test --workspace",
+    "test:frontend": "vitest run",
+    "test:contracts": "cargo test -p tiamat-contracts",
+    "test:e2e": "playwright test --config=e2e/playwright.config.ts",
+    "test:all": "npm test && npm run test:e2e",
+    "fmt": "npm run fmt:rust && npm run fmt:frontend",
+    "fmt:rust": "cargo fmt --all",
+    "fmt:frontend": "prettier --write \"src/**/*.{ts,tsx,css}\" \"e2e/**/*.ts\"",
+    "lint": "npm run lint:rust && npm run lint:frontend",
+    "lint:rust": "cargo clippy --workspace --all-targets -- -D warnings",
+    "lint:frontend": "tsc --noEmit",
+    "setup": "powershell -ExecutionPolicy Bypass -File scripts/setup.ps1",
+    "ci": "npm run fmt:rust -- --check && npm run lint && npm test"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-opener": "^2",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@tauri-apps/cli": "^2",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.2.0",
+    "@types/node": "^22.13.10",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^4.6.0",
+    "jsdom": "^26.0.0",
+    "prettier": "^3.5.3",
+    "typescript": "~5.8.3",
+    "vite": "^7.0.4",
+    "vitest": "^3.0.8"
+  }
+}

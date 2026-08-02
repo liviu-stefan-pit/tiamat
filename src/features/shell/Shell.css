@@ -1,0 +1,59 @@
+.tiamat-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: #0f1419;
+  color: #e8edf2;
+  font-family: "Segoe UI", system-ui, sans-serif;
+}
+
+.tiamat-header {
+  padding: 1.25rem 1.5rem;
+  border-bottom: 1px solid #243041;
+}
+
+.tiamat-header h1 {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+.tiamat-subtitle {
+  margin: 0.25rem 0 0;
+  color: #9aa8b8;
+  font-size: 0.95rem;
+}
+
+.tiamat-main {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+  padding: 1rem 1.5rem 1.5rem;
+}
+
+.tiamat-panel {
+  background: #151b23;
+  border: 1px solid #243041;
+  border-radius: 10px;
+  padding: 1rem;
+}
+
+.tiamat-panel h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  color: #c5d0dc;
+}
+
+.tiamat-panel p {
+  margin: 0;
+  color: #9aa8b8;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+@media (max-width: 960px) {
+  .tiamat-main {
+    grid-template-columns: 1fr;
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "intakeId": "a1b2c3d4-e5f6-4789-a012-3456789abcde",
+  "sources": [
+    {
+      "path": "C:\\projects\\sample-app",
+      "kind": "folder",
+      "readOnly": true
+    }
+  ],
+  "projects": [
+    {
+      "projectId": "sample-app",
+      "root": "C:\\projects\\sample-app",
+      "kind": "git",
+      "languages": ["typescript", "rust"],
+      "buildSystems": ["npm", "cargo"],
+      "testCommands": ["npm test", "cargo test"],
+      "warnings": []
+    }
+  ],
+  "inventoryArtifact": "artifact-intake-001"
+}

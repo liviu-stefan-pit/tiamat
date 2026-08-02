@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tiamat.local/schemas/event-envelope.schema.json",
+  "title": "EventEnvelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "eventId",
+    "sequence",
+    "runId",
+    "type",
+    "level",
+    "timestampUtc",
+    "message",
+    "payload"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "const": 1
+    },
+    "eventId": { "type": "string", "format": "uuid" },
+    "sequence": { "type": "integer", "minimum": 0 },
+    "runId": { "type": "string", "format": "uuid" },
+    "projectId": { "type": "string" },
+    "phaseId": { "type": "string" },
+    "attemptId": { "type": "string", "format": "uuid" },
+    "processId": { "type": "string", "format": "uuid" },
+    "type": { "type": "string", "minLength": 1 },
+    "level": {
+      "type": "string",
+      "enum": ["debug", "info", "warning", "error"]
+    },
+    "timestampUtc": { "type": "string", "minLength": 1 },
+    "message": { "type": "string" },
+    "payload": { "type": "object" }
+  }
+}

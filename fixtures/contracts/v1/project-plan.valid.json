@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "runId": "d4e5f6a7-b8c9-4012-d345-6789abcdef01",
+  "title": "Sample implementation",
+  "summary": "Bootstrap Tiamat shell",
+  "assumptions": [],
+  "risks": [],
+  "phases": [
+    {
+      "phaseId": "P00",
+      "title": "Repository bootstrap",
+      "objective": "Frozen contracts and shell",
+      "dependencies": [],
+      "projectIds": ["tiamat"],
+      "readRoots": ["."],
+      "writeRoots": ["."],
+      "modelTier": "composer",
+      "estimatedMinutes": 10,
+      "acceptanceCriteria": [
+        {
+          "criterionId": "AC-P00-01",
+          "description": "Contracts round-trip",
+          "requiredEvidenceKinds": ["unit", "integration"]
+        }
+      ],
+      "unitTests": [
+        {
+          "testId": "UT-P00-01",
+          "command": ["cargo", "test"],
+          "workingDirectory": ".",
+          "timeoutSeconds": 300,
+          "resourceLocks": [],
+          "expected": { "exitCode": 0, "artifacts": [] },
+          "covers": ["AC-P00-01"]
+        }
+      ],
+      "integrationTests": [],
+      "e2eTests": [],
+      "manualChecks": [],
+      "rollback": { "checkpoint": "initial", "strategy": "restore" },
+      "expectedArtifacts": [],
+      "prompt": "Implement P00",
+      "status": "draft",
+      "evidence": []
+    }
+  ],
+  "finalGates": []
+}
