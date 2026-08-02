@@ -188,6 +188,10 @@ export async function getIntakePreflight(): Promise<PreflightReport | null> {
   return invokeCommand<PreflightReport | null>("get_intake_preflight");
 }
 
+export async function clearIntakePreflight(): Promise<void> {
+  await invokeCommand<void>("clear_intake_preflight");
+}
+
 export async function probeCursorCapability(): Promise<CursorCapabilityReport> {
   return invokeCommand<CursorCapabilityReport>("probe_cursor_capability");
 }

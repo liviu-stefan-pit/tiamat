@@ -182,6 +182,7 @@ pub fn run() {
             commands::run_intake_preflight,
             commands::confirm_intake_trust,
             commands::get_intake_preflight,
+            commands::clear_intake_preflight,
             commands::probe_cursor_capability,
             commands::get_cursor_capability,
             commands::get_app_settings,

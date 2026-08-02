@@ -431,6 +431,12 @@ pub fn get_intake_preflight(state: State<'_, AppState>) -> Result<Option<Preflig
 }
 
 #[tauri::command]
+pub fn clear_intake_preflight(state: State<'_, AppState>) -> Result<(), String> {
+    *state.last_preflight.lock().map_err(|e| e.to_string())? = None;
+    Ok(())
+}
+
+#[tauri::command]
 pub fn probe_cursor_capability(
     state: State<'_, AppState>,
 ) -> Result<crate::cursor::CursorCapabilityReport, String> {

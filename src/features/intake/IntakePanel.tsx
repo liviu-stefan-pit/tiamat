@@ -1,6 +1,7 @@
 import { useState, type DragEvent } from "react";
 import type { PreflightReport } from "../../domain/intake";
 import {
+  clearIntakePreflight,
   confirmIntakeTrust,
   pickIntakePaths,
   runIntakePreflight,
@@ -25,9 +26,24 @@ export function IntakePanel({
   const [dragActive, setDragActive] = useState(false);
   const [trustAck, setTrustAck] = useState(false);
 
+  async function clearSelection() {
+    onPathsChange([]);
+    onReportChange(null);
+    setError(null);
+    setTrustAck(false);
+    setBusy(true);
+    try {
+      await clearIntakePreflight();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function analyze(paths: string[]) {
     if (paths.length === 0) {
-      setError("Select at least one file or folder.");
+      await clearSelection();
       return;
     }
     setBusy(true);
@@ -60,6 +76,12 @@ export function IntakePanel({
       setError(err instanceof Error ? err.message : String(err));
       setBusy(false);
     }
+  }
+
+  async function removePath(path: string) {
+    const next = selectedPaths.filter((p) => p !== path);
+    onPathsChange(next);
+    await analyze(next);
   }
 
   async function onTrustToggle(checked: boolean) {
@@ -139,6 +161,16 @@ export function IntakePanel({
         >
           Pick folder
         </button>
+        {selectedPaths.length > 0 && (
+          <button
+            type="button"
+            data-testid="intake-clear-all"
+            disabled={busy}
+            onClick={() => void clearSelection()}
+          >
+            Clear all
+          </button>
+        )}
       </div>
 
       <form
@@ -166,8 +198,19 @@ export function IntakePanel({
 
       {selectedPaths.length > 0 && (
         <ul className="path-list" data-testid="intake-paths">
-          {selectedPaths.map((p) => (
-            <li key={p}>{p}</li>
+          {selectedPaths.map((p, index) => (
+            <li key={p} className="path-list-item">
+              <span className="path-list-text">{p}</span>
+              <button
+                type="button"
+                className="path-list-remove"
+                data-testid={`intake-remove-${index}`}
+                disabled={busy}
+                onClick={() => void removePath(p)}
+              >
+                Remove
+              </button>
+            </li>
           ))}
         </ul>
       )}

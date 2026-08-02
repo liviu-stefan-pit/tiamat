@@ -591,6 +591,12 @@ export async function browserInvoke<T>(
       const state = ensureDemoState();
       return state.preflight as T;
     }
+    case "clear_intake_preflight": {
+      const state = ensureDemoState();
+      state.preflight = null;
+      saveState(state);
+      return undefined as T;
+    }
     case "probe_cursor_capability":
     case "get_cursor_capability":
       return browserCursorCapability() as T;
