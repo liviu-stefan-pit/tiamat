@@ -1,0 +1,44 @@
+.recovery-offer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 0.85rem 1rem;
+  margin: 0 0 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--tiamat-warn, #b45309) 55%, transparent);
+  background: color-mix(in srgb, var(--tiamat-warn, #b45309) 12%, transparent);
+}
+
+.recovery-offer__title {
+  margin: 0 0 0.35rem;
+  font-size: 1rem;
+  font-weight: 650;
+}
+
+.recovery-offer__reason {
+  margin: 0 0 0.5rem;
+  max-width: 52rem;
+  line-height: 1.4;
+}
+
+.recovery-offer__meta {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+  font-size: 0.85rem;
+  opacity: 0.9;
+}
+
+.recovery-offer__actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.recovery-offer__actions button {
+  min-width: 7rem;
+}

@@ -2,20 +2,28 @@
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  background: #0f1419;
+  background:
+    radial-gradient(ellipse at top left, #1a2736 0%, transparent 55%),
+    linear-gradient(180deg, #0c1117 0%, #121820 100%);
   color: #e8edf2;
-  font-family: "Segoe UI", system-ui, sans-serif;
+  font-family: "Segoe UI", "Candara", system-ui, sans-serif;
 }
 
 .tiamat-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-end;
   padding: 1.25rem 1.5rem;
   border-bottom: 1px solid #243041;
+  background: linear-gradient(90deg, rgba(20, 28, 38, 0.9), rgba(15, 20, 25, 0.6));
 }
 
 .tiamat-header h1 {
   margin: 0;
-  font-size: 1.5rem;
-  font-weight: 600;
+  font-size: 1.65rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
 }
 
 .tiamat-subtitle {
@@ -24,18 +32,53 @@
   font-size: 0.95rem;
 }
 
-.tiamat-main {
-  flex: 1;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 1rem;
-  padding: 1rem 1.5rem 1.5rem;
+.tiamat-header-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  align-items: flex-end;
+  color: #9aa8b8;
+  font-size: 0.85rem;
 }
 
+.tiamat-linkish {
+  border: none;
+  background: transparent;
+  color: #8fb0ff;
+  cursor: pointer;
+  padding: 0;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+.tiamat-layout {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(240px, 300px) 1fr;
+  gap: 1rem;
+  padding: 1rem 1.5rem 1.5rem;
+  min-height: 0;
+}
+
+.tiamat-main-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  min-height: 0;
+}
+
+@media (max-width: 960px) {
+  .tiamat-main-split {
+    grid-template-columns: 1fr;
+  }
+}
+
+
 .tiamat-panel {
-  background: #151b23;
+  background: rgba(21, 27, 35, 0.92);
   border: 1px solid #243041;
-  border-radius: 10px;
+  border-radius: 12px;
   padding: 1rem;
 }
 
@@ -52,8 +95,337 @@
   line-height: 1.45;
 }
 
+.tiamat-muted {
+  color: #7f8b99 !important;
+  font-size: 0.85rem !important;
+}
+
+.tiamat-dropzone {
+  border: 1px dashed #3a4a5c;
+  border-radius: 10px;
+  padding: 1rem;
+  background: rgba(10, 14, 20, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.tiamat-dropzone.is-active {
+  border-color: #5b7cff;
+  background: rgba(30, 42, 64, 0.55);
+}
+
+.tiamat-path-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  color: #9aa8b8;
+}
+
+.tiamat-path-entry input {
+  border: 1px solid #3a4a5c;
+  background: #0f1419;
+  color: #e8edf2;
+  border-radius: 6px;
+  padding: 0.4rem 0.5rem;
+}
+
+.tiamat-path-list,
+.tiamat-project-list,
+.tiamat-preflight ul {
+  margin: 0.35rem 0 0;
+  padding-left: 1.1rem;
+  color: #9aa8b8;
+  font-size: 0.82rem;
+}
+
+.tiamat-preflight {
+  margin-top: 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.tiamat-preflight h3,
+.tiamat-preflight h4 {
+  margin: 0;
+  color: #c5d0dc;
+}
+
+.tiamat-preflight h3 {
+  font-size: 0.95rem;
+}
+
+.tiamat-preflight h4 {
+  font-size: 0.82rem;
+  margin-bottom: 0.2rem;
+}
+
+.tiamat-preflight-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4rem 0.75rem;
+  margin: 0;
+}
+
+.tiamat-preflight-meta div {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+}
+
+.tiamat-preflight-meta dt {
+  color: #7f8b99;
+}
+
+.tiamat-preflight-meta dd {
+  margin: 0;
+  color: #e8edf2;
+}
+
+.tiamat-trust {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.tiamat-trust label {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  font-size: 0.82rem;
+  color: #c5d0dc;
+  line-height: 1.35;
+}
+
+.tiamat-preflight > button,
+.tiamat-dropzone > button {
+  border: 1px solid #3a4a5c;
+  background: #1a2330;
+  color: #e8edf2;
+  border-radius: 8px;
+  padding: 0.45rem 0.75rem;
+  cursor: pointer;
+  width: fit-content;
+}
+
+.tiamat-preflight > button:disabled,
+.tiamat-dropzone > button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.tiamat-graph-canvas {
+  margin-top: 0.75rem;
+  min-height: 140px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 1rem;
+  border-radius: 10px;
+  background:
+    linear-gradient(180deg, rgba(18, 28, 40, 0.8), rgba(12, 16, 22, 0.9)),
+    repeating-linear-gradient(
+      90deg,
+      transparent,
+      transparent 11px,
+      rgba(70, 90, 110, 0.08) 12px
+    );
+}
+
+.tiamat-graph-node {
+  min-width: 3.2rem;
+  text-align: center;
+  padding: 0.55rem 0.7rem;
+  border-radius: 8px;
+  border: 1px solid #3a4a5c;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.tiamat-graph-node.is-ready {
+  background: #1d3a2c;
+  border-color: #2f6b4c;
+}
+
+.tiamat-graph-node.is-running {
+  background: #2a3348;
+  border-color: #5b7cff;
+  box-shadow: 0 0 0 1px rgba(91, 124, 255, 0.25);
+}
+
+.tiamat-graph-node.is-blocked {
+  background: #3a2424;
+  border-color: #a63d3d;
+}
+
+.tiamat-graph-node.is-failed {
+  background: #402020;
+  border-color: #8b1e1e;
+}
+
+.tiamat-graph-node.is-passed {
+  background: #1d3a2c;
+  border-color: #2f7d4a;
+}
+
+.tiamat-graph-node.is-draft {
+  background: #2a2f38;
+  color: #9aa8b8;
+}
+
+.tiamat-graph-edge {
+  width: 2rem;
+  height: 2px;
+  background: #3a4a5c;
+}
+
+.tiamat-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.75rem 0;
+}
+
+.tiamat-controls button {
+  border: 1px solid #3a4a5c;
+  background: #1a2330;
+  color: #e8edf2;
+  border-radius: 8px;
+  padding: 0.45rem 0.75rem;
+  cursor: pointer;
+}
+
+.tiamat-controls button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.tiamat-controls button.danger {
+  border-color: #6b3a3a;
+  background: #2a1717;
+}
+
+.tiamat-log {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 280px;
+}
+
+.tiamat-log-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.tiamat-log-filters {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.tiamat-log-filters label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  color: #9aa8b8;
+}
+
+.tiamat-log-filters input,
+.tiamat-log-filters select {
+  border: 1px solid #3a4a5c;
+  background: #0f1419;
+  color: #e8edf2;
+  border-radius: 6px;
+  padding: 0.4rem 0.5rem;
+}
+
+.tiamat-log-list {
+  list-style: none;
+  margin: 0.75rem 0;
+  padding: 0;
+  overflow: auto;
+  flex: 1;
+  border: 1px solid #243041;
+  border-radius: 8px;
+  background: rgba(10, 14, 20, 0.45);
+}
+
+.tiamat-log-list li {
+  display: grid;
+  grid-template-columns: 3rem 4.5rem 9rem 1fr;
+  gap: 0.5rem;
+  padding: 0.45rem 0.65rem;
+  border-bottom: 1px solid #1c2530;
+  font-size: 0.82rem;
+  align-items: baseline;
+}
+
+.tiamat-log-seq {
+  color: #7f8b99;
+  font-variant-numeric: tabular-nums;
+}
+
+.tiamat-log-level {
+  text-transform: uppercase;
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+}
+
+.tiamat-log-level.level-info {
+  color: #7eb6ff;
+}
+
+.tiamat-log-level.level-warning {
+  color: #e2b45c;
+}
+
+.tiamat-log-level.level-error {
+  color: #e27a7a;
+}
+
+.tiamat-log-level.level-debug {
+  color: #9aa8b8;
+}
+
+.tiamat-log-type {
+  color: #c5d0dc;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 0.78rem;
+}
+
+.tiamat-log-message {
+  color: #e8edf2;
+}
+
+.tiamat-error {
+  margin: 0.75rem 1.5rem 0;
+  padding: 0.65rem 0.85rem;
+  border-radius: 8px;
+  background: #2a1717;
+  border: 1px solid #6b3a3a;
+  color: #f0c7c7;
+}
+
 @media (max-width: 960px) {
-  .tiamat-main {
+  .tiamat-layout {
     grid-template-columns: 1fr;
+  }
+
+  .tiamat-log-filters {
+    grid-template-columns: 1fr;
+  }
+
+  .tiamat-log-list li {
+    grid-template-columns: 3rem 4rem 1fr;
+  }
+
+  .tiamat-log-message {
+    grid-column: 1 / -1;
   }
 }

@@ -1,0 +1,35 @@
+.tiamat-panel ul[data-testid="workspace-projects"] {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.tiamat-panel ul[data-testid="workspace-projects"] li {
+  padding: 0.35rem 0;
+  border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.tiamat-workspace-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.tiamat-workspace-actions button,
+.tiamat-panel ul[data-testid="workspace-projects"] button {
+  font: inherit;
+  cursor: pointer;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid color-mix(in srgb, currentColor 28%, transparent);
+  background: transparent;
+  color: inherit;
+}
+
+.tiamat-workspace-actions button:disabled,
+.tiamat-panel ul[data-testid="workspace-projects"] button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

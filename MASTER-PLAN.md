@@ -943,7 +943,7 @@ do not change later phase scope. Leave a coherent checkpoint-ready diff.
 
 ### P01 — Desktop shell, durable store, and event replay
 
-Status: Not started  
+Status: Done  
 Model: Grok Low  
 Dependencies: P00
 
@@ -961,6 +961,17 @@ Acceptance:
 - UI renders persisted fake run events and filters them.
 - Migration tests cover empty and prior-version fixtures.
 
+Evidence (2026-08-02):
+
+- Typed Tauri bridge commands: `ensure_demo_run`, `list_runs`, `replay_events`, `list_artifacts`, `transition_run_status` plus `tiamat://events` emission after durable append
+- SQLite WAL store with migrations `001_initial` → `002_artifacts`, atomic status+event+outbox writes, content-addressed artifact metadata under app data
+- React shell: placeholder intake, read-only graph area, filtered activity logger, run controls; remount reconnects via replay
+- `cargo test --workspace` — Rust unit + SQLite/replay integration (`src-tauri/tests/store_replay.rs`), including empty and prior-version migration fixtures
+- `npm run test:frontend` — 14 Vitest tests (shell, filters, bridge remount/replay, typed commands)
+- `npm run test:e2e` — Playwright remount/restart ordered-event replay + filter coverage (`e2e/smoke.spec.ts`)
+- `cargo fmt --all --check` && `cargo clippy --workspace --all-targets -- -D warnings` && `npm run lint:frontend` && `npm run build`
+- No live Cursor calls
+
 Copy-paste phase prompt:
 
 ```text
@@ -977,7 +988,7 @@ checkpoint-ready diff.
 
 ### P02 — Intake, project discovery, and trust preflight
 
-Status: Not started  
+Status: Done  
 Model: Grok Medium  
 Dependencies: P01
 
@@ -993,6 +1004,17 @@ Acceptance:
 - Escape fixtures and over-limit inputs fail safely.
 - Secret values never enter events.
 - Start remains disabled until preflight and trust pass.
+
+Evidence (2026-08-02):
+
+- Rust `intake` module: path validation/canonicalization, ignore rules, inventory limits, repo/language/build/test detection, secret-risk metadata (hash only), trust-gated `PreflightReport`
+- Tauri commands: `pick_intake_paths`, `run_intake_preflight`, `confirm_intake_trust`, `get_intake_preflight`; events emit counts/metadata only (no secret values); Cursor probe stubbed as deferred (P03), no live Cursor calls
+- React intake/preflight UI: drop zone, file/folder pickers, path entry, warnings/blockers/secret-risk metadata, dual trust checkboxes, Start gated on `canStart`
+- `cargo test --workspace` — unit parsers/boundaries + integration fixtures (git, nested repo, Unicode, junction escape, secret-risk, over-limit, ignore)
+- `npm run test:frontend` — 19 Vitest tests including Start gate + warning render + over-limit blockers
+- `npm run test:e2e` — Playwright proves Start disabled until trust; warnings render; fixture secret strings absent from UI
+- `cargo fmt --all --check` && `cargo clippy --workspace --all-targets -- -D warnings` && `npm run lint:frontend` && `npm run build`
+- Fixture secret values never serialized into events/UI payloads
 
 Copy-paste phase prompt:
 
@@ -1011,7 +1033,7 @@ checkpoint-ready diff.
 
 ### P03 — Cursor capability adapter and deterministic fake CLI
 
-Status: Not started  
+Status: Done  
 Model: Grok Medium  
 Dependencies: P01, P02
 
@@ -1029,6 +1051,18 @@ Acceptance:
 - Malformed/mixed streams preserve diagnostics.
 - Every fake mode is deterministic and usable by later tests.
 
+Evidence (2026-08-02):
+
+- Rust `cursor` module: resolve (`TIAMAT_CURSOR_CLI` / PATH / known installs), bounded `--version`/`--help`/`--list-models`/`status` probes, feature-aware argv builder (unsupported flags omitted), stream-json parser (chat ID/usage/diagnostics), argv/stdin secret redaction
+- Fake CLI matrix under `fixtures/cursor-cli/` (`success`, `nonzero_exit`, `malformed_mixed`, `silent_hang`, `chatty_hang`, `child_tree`, `ignore_terminate`, `partial_timeout`, `resume_success`, `model_unavailable`, `auth_failure`, `flood_oversized`, `secret_echo`) — no paid/live Cursor calls
+- Tauri commands: `probe_cursor_capability`, `get_cursor_capability`, `list_cursor_models`, `preview_cursor_command`; preflight Cursor stub populated from bounded probe
+- React settings/status UI: header Cursor status, re-probe, features/models, dry-run preview with secret redaction (`Spawned: no`)
+- `cargo test --workspace` — parser/builder unit tests + subprocess integration against every fake mode (`src-tauri/tests/cursor_adapter.rs`)
+- `npm run test:frontend` — 24 Vitest tests including settings capability/redaction
+- `npm run test:e2e` — Playwright capability/status + dry-run redaction (`e2e/smoke.spec.ts`)
+- `cargo fmt --all --check` && `cargo clippy --workspace --all-targets -- -D warnings` && `npm run lint:frontend` && `npm run build`
+- Verified: malformed streams preserve diagnostics; unavailable models; auth failure mode; AWS/api-key/fixture secret redaction
+
 Copy-paste phase prompt:
 
 ```text
@@ -1045,7 +1079,7 @@ status/evidence only when all gates pass and leave a checkpoint-ready diff.
 
 ### P04 — Isolated workspace and checkpoint manager
 
-Status: Not started  
+Status: Done  
 Model: Grok Medium  
 Dependencies: P02
 
@@ -1064,6 +1098,17 @@ Acceptance:
 - Checkpoint and rollback/quarantine are deterministic.
 - Multiple repositories have distinct roots and locks.
 
+Evidence (2026-08-02):
+
+- Rust `workspace` module: `--no-hardlinks` owned clones, dirty staged/unstaged/untracked overlay reconstruction (source read-only), non-git guarded copy + baseline git, internal worktrees, multi-repo `manifest.json`, read/write root validation, checkpoints, quarantine, retention (blocks silent unpromoted cleanup), export/promotion metadata
+- Tauri commands: `materialize_workspace`, `get_workspace_manifest`, `validate_workspace_roots`, `create_workspace_checkpoint`; Start materializes isolated output and emits `workspace.materialized`
+- React workspace panel shows managed roots, promotion status, and source-fingerprint unchanged proof
+- `cargo test --workspace` — path/manifest unit tests + integration fixtures (clean git, dirty overlay, nested/multi-repo, non-git notes, checkpoint/quarantine/export/retention) in `src-tauri/tests/workspace_isolation.rs`
+- `npm run test:frontend` — 27 Vitest tests including workspace domain/panel + materialize bridge
+- `npm run test:e2e` — Playwright intake→isolated-output proves `source unchanged` and managed roots (`e2e/smoke.spec.ts`)
+- `cargo fmt --all --check` && `cargo clippy --workspace --all-targets -- -D warnings` && `npm run lint:frontend` && `npm run build`
+- Verified: source fixtures never modified/cleaned; no linked worktrees attached to sources; no live Cursor calls
+
 Copy-paste phase prompt:
 
 ```text
@@ -1081,7 +1126,7 @@ pass and leave a checkpoint-ready diff.
 
 ### P05 — Architect run and validated plan compiler
 
-Status: Not started  
+Status: Done  
 Model: Grok High  
 Dependencies: P03, P04
 
@@ -1100,6 +1145,18 @@ Acceptance:
 - JSON and Markdown phases match exactly.
 - A fixture rough-spec folder generates a valid plan using fake CLI.
 
+Evidence (2026-08-02):
+
+- Rust `planner` module: exact §12.2 system prompt, bounded intake context, SOL (`gpt-5.6-sol-high`) with Grok High (`cursor-grok-4.5-high`) degraded fallback, plan-mode-only invoke (`force`/`auto-review` forbidden), stream JSON extract, schema+semantic validation (DAG/roots/tiers/prompts/tests), deterministic Markdown renderer + hash check, atomic `.tiamat/plan.json`+`MASTER-PLAN.md`, control-repo checkpoint, graph projection
+- Fake CLI architect modes: `architect_valid`, `architect_invalid`, `architect_repairable`, `architect_no_sol` under `fixtures/cursor-cli/`; rough-spec fixture `fixtures/intake/rough-spec/`
+- Tauri commands: `run_architect_pipeline`, `get_project_plan`, `get_graph_projection`, `get_architect_result`; Start materializes workspace then runs architect and projects phases into the graph
+- Proven cannot-implement: architect argv always includes `--mode plan` and never `--force`/`--auto-review`; fake CLI rejects implementation approval flags (exit 12)
+- `cargo test --workspace` — validator/renderer unit tests + fake CLI integration (`src-tauri/tests/architect_pipeline.rs`: valid/invalid/repaired/degraded)
+- `npm run test:frontend` — 28 Vitest tests including plan graph projection
+- `npm run test:e2e` — Playwright rough-spec→visible plan (`e2e/smoke.spec.ts`)
+- `cargo fmt --all --check` && `cargo clippy --workspace --all-targets -- -D warnings` && `npm run lint:frontend` && `npm run build`
+- No live Cursor calls
+
 Copy-paste phase prompt:
 
 ```text
@@ -1117,7 +1174,7 @@ status/evidence only after all criteria pass and leave a checkpoint-ready diff.
 
 ### P06 — Dependency scheduler, locks, and model router
 
-Status: Not started  
+Status: Done  
 Model: Grok High  
 Dependencies: P03, P04, P05
 
@@ -1135,6 +1192,19 @@ Acceptance:
 - Restart does not duplicate phase attempts.
 - Model substitutions and escalation reasons are visible and persisted.
 
+Evidence (2026-08-02):
+
+- Rust `scheduler` module: DAG validate/readiness/blocking, critical-path fairness, sorted write+resource locks, concurrency cap `min(cpus/4,3)` clamped 1–4, durable lease/epoch, pause/resume, attempt lifecycle with unique active-attempt constraint, Composer→Grok Low→Medium→High escalation (never SOL for implementation/review), same-tier Grok High resume once, deterministic policy/auth/build non-escalation
+- SQLite migration `003_scheduler`: phases, attempts, scheduler_leases, resource_locks
+- Tauri commands: `start_scheduler`, `scheduler_tick`, `scheduler_complete_attempt`, `scheduler_pause`, `scheduler_resume`, `get_scheduler_snapshot`; graph projection overlays runtime phase statuses; orchestrator mode `dag-scheduler`
+- Fake-agent overlap detector + restart idempotency in `src-tauri/tests/scheduler_concurrent.rs`
+- Browser scheduler demo fixture `C:\fixture\scheduler-demo` drives parallel/blocked/paused/escalated graph states without live models
+- `cargo test --workspace` — scheduler/router unit tests + concurrent integration
+- `npm run test:frontend` — 29 Vitest tests including scheduler projection
+- `npm run test:e2e` — Playwright scheduler demo graph states (`e2e/smoke.spec.ts`)
+- `cargo fmt --all --check` && `cargo clippy --workspace --all-targets -- -D warnings` && `npm run lint:frontend` && `npm run build`
+- No live Cursor/model calls
+
 Copy-paste phase prompt:
 
 ```text
@@ -1151,7 +1221,7 @@ P06 status/evidence after objective gates pass and leave a checkpoint-ready diff
 
 ### P07 — Job Object process host, watchdog, and global abort
 
-Status: Not started  
+Status: Done  
 Model: Grok High  
 Dependencies: P03, P06
 
@@ -1171,6 +1241,17 @@ Acceptance:
 - First/second press timing, registration collision, rebinding, tray fallback, and background-close behavior pass.
 - Timeout resumes same chat with next model in fixture flow.
 
+Evidence (2026-08-02):
+
+- Rust `process` module: kill-on-close Job Objects, `PROC_THREAD_ATTRIBUTE_JOB_LIST` create-time association proof, contained suspended→assign→resume launcher for piped I/O, durable registry (migration `004_processes`), identity (PID+creation time+exe), watchdog 8m/10m/15s (test-accelerated), graceful→forced stop, pipe drain/reap, cleanup proofs, startup reconcile, AbortController (first/second press, close policy, degraded shortcut + tray)
+- Tauri: `tauri-plugin-global-shortcut` Ctrl+Shift+F12, tray Emergency stop fallback, close-request Keep-Tiamat-running / Stop-all-and-exit, commands `emergency_abort` / `get_process_registry` / `get_abort_settings` / `acknowledge_degraded_abort` / `rebind_abort_shortcut` / `apply_close_policy` / `reconcile_processes` / `run_process_fixture`
+- React: Cancel/Emergency stop share native abort path, degraded-ack gate, shortcut rebind settings, close-policy dialog, unfocused Ctrl+Shift+F12 handler
+- `cargo test --workspace` — unit + Job Object integration (`src-tauri/tests/process_job_object.rs`: attribute-list association, child_tree, ignore_terminate, silent/chatty/partial timeout, cancel, resume same-chat, registry empty, zero survivors)
+- `npm run test:frontend` — 31 Vitest tests including process domain
+- `npm run test:e2e` — Playwright unfocused abort + second-press force, timeout/resume metadata, close-policy keep-running + rebind (`e2e/smoke.spec.ts`)
+- `cargo fmt --all --check` && `cargo clippy --workspace --all-targets -- -D warnings` && `npm run lint:frontend` && `npm run build`
+- Cleanup proof: every hosted fixture asserted `cleanup_ok && zero_survivors && active_after_cleanup == 0`; no live Cursor calls
+
 Copy-paste phase prompt:
 
 ```text
@@ -1189,7 +1270,7 @@ Never call live Cursor. Update P07 status/evidence only after cleanup proof pass
 
 ### P08 — Phase executor and verification gates
 
-Status: Not started  
+Status: Done  
 Model: Grok High  
 Dependencies: P04, P06, P07
 
@@ -1208,6 +1289,17 @@ Acceptance:
 - Out-of-bound edits quarantine the attempt.
 - Timed-out partial work resumes or rolls back according to evidence.
 
+Evidence (2026-08-02):
+
+- Rust `executor` + `verification` modules: complete phase/recovery prompt assembly (§13.3), managed-root Cursor invoke (`--force`), git diff + managed-run escape scan, command-policy test runner, advisory discovery, baseline/flaky classification, immutable `PhaseResult` schema (`schemas/phase-result.schema.json`), orchestrator-owned plan.json/MASTER-PLAN.md projection, checkpoint gating, quarantine on escape, timeout resume/rollback decisions
+- Fake CLI modes: `impl_success`, `impl_fail_tests`, `impl_escape`, `impl_timeout_partial`, `impl_resume`; fixture project `fixtures/intake/executor-app/` with unit/integration/e2e gate scripts
+- Tauri commands: `execute_phase_fixture`, `get_executor_outcome`; Start on executor fixtures runs gates then checkpoints only after all three levels pass
+- `cargo test --workspace` — decision unit tests + integration fixtures success/failure/escape/timeout in `src-tauri/tests/phase_executor.rs`
+- `npm run test:frontend` — 32 Vitest tests including executor domain checkpoint gate
+- `npm run test:e2e` — Playwright executor fake project reaches `checkpoint=ready` only after unit+integration+e2e (`e2e/smoke.spec.ts`)
+- `cargo fmt --all --check` && `cargo clippy --workspace --all-targets -- -D warnings` && `npm run lint:frontend` && `npm run build`
+- No paid/live Cursor calls
+
 Copy-paste phase prompt:
 
 ```text
@@ -1225,7 +1317,7 @@ status/evidence only after all criteria pass and leave a checkpoint-ready diff.
 
 ### P09 — Production run graph, logger, controls, and reports
 
-Status: Not started  
+Status: Done  
 Model: Grok Medium  
 Dependencies: P01, P05, P06, P08
 
@@ -1244,6 +1336,18 @@ Acceptance:
 - Controls map to native state transitions.
 - Keyboard navigation, labels, focus, and contrast pass automated checks.
 
+Evidence (2026-08-02):
+
+- Read-only `@xyflow/react` DAG (`GraphPanel` + `PhaseNode`) with minimap, fit/zoom controls, status-colored nodes, animated active edges, and `NodeDetailPanel` fed from plan/scheduler/executor projection (graph is never source of truth)
+- Windowed virtualized activity logger: category/phase/attempt/project/level/type/search filters, follow mode, truncation expand, log + redacted report export
+- Run controls: pause/resume/cancel/emergency stop + retry failed phase + open output; attempt timeline, evidence panel, completion summary
+- Perf fixtures: `seed_perf_events` / `emit_event_burst` / `export_run_report` / `scheduler_retry_phase` / `open_run_output` (SQLite bulk seed + browser-store memory-backed large seeds); reference doc `fixtures/perf/README.md`
+- `cargo test --workspace` — includes `src-tauri/tests/event_volume.rs` (100k monotonic replay + 1k burst persistence)
+- `npm run test:frontend` — 40 Vitest tests including graph layout, log virtualization, completion summary, jest-axe shell a11y
+- `npm run test:e2e` — P09 controls/keyboard/restart/completion + 100k DOM-bound + 1k/s p95 latency gates (`e2e/p09-controls.spec.ts`, `e2e/p09-perf.spec.ts`) plus prior smoke suite
+- `cargo fmt --all --check` && `cargo clippy --workspace --all-targets -- -D warnings` && `npm run lint:frontend` && `npm run build`
+- No live agents / paid Cursor calls
+
 Copy-paste phase prompt:
 
 ```text
@@ -1261,7 +1365,7 @@ leave a checkpoint-ready diff.
 
 ### P10 — Recovery, security hardening, and fault injection
 
-Status: Not started  
+Status: Done  
 Model: Grok High  
 Dependencies: P02, P04, P07, P08, P09
 
@@ -1279,6 +1383,19 @@ Acceptance:
 - Low disk/output flood/malformed DB states fail visibly and safely.
 - Recovery offers resume/cancel before executing anything new.
 
+Evidence (2026-08-02):
+
+- Rust `recovery` module: startup scan (DB integrity → process reconcile → interrupt active attempts → side-effect reconcile → Resume/Cancel offer), transactional idempotency ledger (`prepared→executing→observed→reconciled`), disk pressure probe, corrupt-DB preserve-copy, retention settings (migration `005_recovery`)
+- Rust `security` module: expanded redaction (AWS/PAT/PEM/auth headers/connection strings/env), output/line/prompt limits with flood detection, §10.2 prompt-injection defense block + marker scan + write-root expansion denial, hardened command policy (deny curl/publish/secret-dump/force-push), audit helpers (`policy.*` / `security.*`)
+- Fault injection harness at plan write, DB commit, process spawn/exit, test launch, and git checkpoint boundaries (`set_fault_injection` / `run_fault_injection_fixture`)
+- Tauri: `run_startup_recovery`, `get_recovery_offer`, `recovery_resume`, `recovery_cancel`, `probe_disk_pressure`, fault/redact/limits/retention/cleanup commands; scheduler tick gated until user chooses; process host applies limits+redaction before persist; exports refuse fixture secret leaks
+- React recovery offer banner with Resume/Cancel; Start gated while offer pending
+- `cargo test --workspace` — unit + `src-tauri/tests/recovery_security.rs` (crash/restart idempotency, fault matrix, malformed DB, disk/flood, malicious prompt, command policy, secret non-leak to DB/artifacts, retention, resume/cancel)
+- `npm run test:frontend` — 42 Vitest tests including recovery domain
+- `npm run test:e2e` — P10 resume/cancel + redaction (`e2e/p10-recovery.spec.ts`) plus prior suites (19 passed)
+- `cargo fmt --all --check` && `cargo clippy --workspace --all-targets -- -D warnings` && `npm run lint:frontend` && `npm run build`
+- Asserted: fixture secrets never reach DB events, artifacts, exports, or UI; no live Cursor calls
+
 Copy-paste phase prompt:
 
 ```text
@@ -1295,7 +1412,7 @@ status/evidence only after all security/recovery gates pass.
 
 ### P11 — Packaging, TestBench, and end-to-end acceptance
 
-Status: Not started  
+Status: Done  
 Model: Grok High  
 Dependencies: P00, P01, P02, P03, P04, P05, P06, P07, P08, P09, P10
 
@@ -1315,6 +1432,24 @@ Acceptance:
 - Packaged stop/exit leaves no owned processes.
 - The disposable VM test is repeatable from a declared base image and does not require mutating a contributor's machine.
 
+Evidence (2026-08-02):
+
+- TestBench suite under `fixtures/testbench/` (§15.3): notes-only, web-app, multi-project, dirty-git, nested-repo, secret-risk, junction-escape, unicode-项目, long-path, executor-app; materialize via `npm run testbench:materialize` (git baselines, junction, 835-char long path)
+- One-command deterministic demo: `npm run demo` / `scripts/demo.ps1` (fake CLI only)
+- Windows packaging: `src-tauri/tauri.conf.json` NSIS+MSI; `npm run package` stages unsigned-dev artifacts + SHA-256
+  - `artifacts/packages/Tiamat_0.1.0_x64-setup.exe` sha256 `216bb9a8da1ca025e19f8d3ef19060a83e335f0427d404d56059d370c74d0ee7`
+  - `artifacts/packages/Tiamat_0.1.0_x64_en-US.msi` sha256 `cdbee67986cf95ed9efe6401408db52cc3986bc34205fcb13132a15f6ed4d7b4`
+- Install/upgrade/uninstall policy: `packaging` module + `scripts/vm/run-install-matrix.ps1`; uninstall retains unpromoted managed workspaces; upgrade preserves DB/settings/workspaces
+- Disposable VM runner docs: `scripts/vm/README.md` (base image, privileges, snapshot/reboot policy, retained artifacts)
+- Clean-profile smoke: `npm run test:packaged` → `artifacts/clean-profile/` (isolated APPDATA)
+- Persisted configured CLI path (migration `006_app_settings`) + Settings UI Save/probe; resolution order configured → env → PATH → known installs
+- Unicode + long-path fixtures/tests; global abort shortcut settings coverage; packaged process-cleanup proof `npm run test:cleanup-proof` → `artifacts/cleanup-proof/cleanup-proof-summary.json` (`zeroOwnedProcesses=true`)
+- Spending-consented version-gated real Cursor canary: `npm run test:canary` → `artifacts/canary/canary-result.json` (`ok=true`, chatId extracted, stream-json + plan + force + model-changing resume; capabilityHash `5a6424ec…83049`; agent `2026.07.23`)
+- Deterministic CI remains fake-only (`.github/workflows/ci.yml` unchanged; canary never in CI)
+- `cargo test --workspace` (includes `packaging_acceptance.rs`) + `npm run test:frontend` (42) + `npm run test:e2e` (24, includes `e2e/p11-packaged.spec.ts`)
+- `cargo fmt --all --check` && `cargo clippy --workspace --all-targets -- -D warnings` && `npm run lint:frontend` && `npm run build`
+- Release-candidate checkpoint: `P11-RELEASE-CANDIDATE.md` (and `artifacts/P11-RELEASE-CANDIDATE.md` when artifacts are present)
+
 Copy-paste phase prompt:
 
 ```text
@@ -1333,7 +1468,7 @@ exist; leave a release-candidate checkpoint.
 
 ### P12 — User documentation and release preparation
 
-Status: Not started  
+Status: Done  
 Model: Grok High  
 Dependencies: P11
 
@@ -1351,6 +1486,19 @@ Acceptance:
 - Unit tests cover documentation/config parsers, integration checks execute documented commands in fixtures, and a new-user packaged E2E follows the guide.
 - Emergency stop, isolation limits, timeout/resume, costs, and limitations are explicit.
 - Release-preparation artifacts are traceable to a candidate commit.
+
+Evidence (2026-08-02):
+
+- End-user guides under `docs/user/`: install, first-run, intake/trust, Start implementation, graph/logger, pause/cancel/global abort, promotion/export, Normal-mode containment limits, model/cost, timeout/resume, recovery, privacy/security, troubleshooting, known limits
+- Contributor guides under `docs/contributor/`: architecture, contracts, tests, fake CLI, packaging, release, operator runbook
+- Docs index `docs/README.md`; machine manifest `docs/config/docs-manifest.json` (28 guides, 20 documented commands, UI selectors, package hashes, forbidden examples)
+- Version/changelog finalized at **0.1.0** (`package.json`, `tauri.conf.json`, workspace Cargo, `CHANGELOG.md`); product license `LICENSE` (MIT)
+- Release prep: `docs/release/CHECKLIST.md`, `SIGNING.md` (`unsigned-dev`), `PACKAGE-HASHES.md` (NSIS `216bb9a8…c74d0ee7`, MSI `cdbee679…ed4d7b4` matching P11), `KNOWN-LIMITATIONS.md`, `reports/DEPENDENCY-LICENSES.md`, `reports/VULNERABILITY-REPORT.md` (npm audit total=0; cargo-audit deferred to P13)
+- Tooling: `tools/docs/docs-tooling.mjs` + Vitest unit tests; integration `scripts/docs/validate.mjs` via `npm run test:docs` → `artifacts/docs/docs-validation.json` (`ok=true`)
+- Rust acceptance `src-tauri/tests/docs_acceptance.rs` (manifest/guides/hashes vs P11 candidate)
+- New-user TestBench E2E `e2e/p12-new-user.spec.ts` (fake CLI → executor-app intake → trust → Start → abort controls; no paid models)
+- CI: `.github/workflows/ci.yml` runs `npm run test:docs`
+- Handoff checkpoint: `P12-RELEASE-PREP.md` (traceable to `P11-RELEASE-CANDIDATE.md`)
 
 Copy-paste phase prompt:
 
@@ -1370,7 +1518,7 @@ status/evidence only when the handoff and release-preparation artifacts are exac
 
 ### P13 — Independent final reviews, remediation, and release handoff
 
-Status: Not started  
+Status: Done  
 Model: Grok High, separate fresh agents  
 Dependencies: P12
 
@@ -1390,6 +1538,15 @@ Acceptance:
 - Review agents do not review their own remediation.
 - Final docs, package hashes, regression, packaged tests, and cleanup evidence are newer than every fix.
 - Release artifact/version is traceable to the final reviewed commit.
+
+Evidence (2026-08-02):
+
+- Independent reviews (both FAIL initially): `artifacts/p13/reviews/ARCH-CODE-DATA-DOCS.md`, `artifacts/p13/reviews/REL-SEC-JOB-RELEASE.md`; disposition `artifacts/p13/COORDINATOR-DISPOSITION.md`
+- Remediation batches + fresh verifies: Contracts PASS, SEC/DOCS PASS, ProcessHost + REL-001/DATA-002 PASS (`artifacts/p13/remediation/*`)
+- Advisories: cargo-audit 0.22.2 → 0 vulns (`artifacts/p13/cargo-audit.txt`); npm audit 0; report updated
+- Suites: `npm run ci`, `test:e2e` (27), recovery_security (10), `test:cleanup-proof` (`zeroOwnedProcesses=true`), `test:packaged`, install matrix, `testbench:materialize`, `test:docs` — logs under `artifacts/p13/suites/`
+- Packages rebuilt post-fix; hashes NSIS `1a3b9277…46648b`, MSI `04299e81…f25b57` in `docs/release/PACKAGE-HASHES.md` / manifest / `artifacts/packages/`
+- Handoff: `P13-RELEASE-HANDOFF.md` (base commit `50032db`; working-tree release candidate pending commit)
 
 Copy-paste phase prompt:
 

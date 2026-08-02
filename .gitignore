@@ -35,3 +35,9 @@ blob-report/
 
 # Tauri
 src-tauri/gen/
+
+# P11 artifacts / generated TestBench
+artifacts/
+fixtures/testbench/.generated/
+# Materialized junction (loop); recreated by scripts/materialize-testbench.ps1
+fixtures/testbench/junction-escape/safe/escape-link/

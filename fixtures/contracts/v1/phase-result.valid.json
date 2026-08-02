@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "phaseId": "P01",
+  "attemptId": "a1b2c3d4-e5f6-4789-a012-3456789abcde",
+  "status": "passed",
+  "summary": "Notes list vertical slice implemented with all gates green",
+  "changedFiles": ["src/feature.ts", "tests/unit.mjs"],
+  "evidenceIds": ["ev-unit-1", "ev-int-1", "ev-e2e-1"],
+  "acceptanceSatisfied": ["AC-P01-01"],
+  "artifacts": ["src/feature.ts"],
+  "notes": [],
+  "immutable": true,
+  "progressUseful": true
+}

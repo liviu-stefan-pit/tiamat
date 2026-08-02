@@ -1,0 +1,4 @@
+.generated/
+**/.git/
+*.log
+safe/escape-link/

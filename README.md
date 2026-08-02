@@ -2,6 +2,10 @@
 
 Tiamat turns rough project material into a tested implementation on Windows using a Tauri 2 desktop shell, Rust core, and React/TypeScript UI.
 
+User and contributor documentation: [`docs/README.md`](docs/README.md)  
+Release prep (hashes, signing, checklist): [`docs/release/`](docs/release/)  
+Changelog: [`CHANGELOG.md`](CHANGELOG.md) · License: [`LICENSE`](LICENSE)
+
 ## Prerequisites
 
 - Windows 10/11
@@ -32,29 +36,31 @@ npm run tauri:dev
 | `npm run setup` | Scripted fresh-clone bootstrap and verification |
 | `npm run tauri:dev` | Desktop dev shell (Tauri + Vite) |
 | `npm run tauri:build` | Build desktop bundle |
+| `npm run package` | Build NSIS/MSI, stage hashes under `artifacts/packages` |
+| `npm run demo` | One-command deterministic TestBench demo (fake CLI only) |
+| `npm run testbench:materialize` | Materialize git/junction/long-path TestBench cases |
 | `npm test` | Rust workspace + frontend unit + contract integration tests |
 | `npm run test:rust` | `cargo test --workspace` |
 | `npm run test:frontend` | Vitest unit tests |
 | `npm run test:contracts` | Contract fixture integration tests |
-| `npm run test:e2e` | Playwright dev-host launch smoke |
+| `npm run test:e2e` | Playwright dev-host acceptance (fake-only) |
+| `npm run test:docs` | Docs/config unit tests + documented-command integration checks |
+| `npm run test:packaged` | Isolated-profile clean smoke (no contributor APPDATA mutation) |
+| `npm run test:cleanup-proof` | Zero-owned-process cleanup proof |
+| `npm run test:canary` | Spending-consented real Cursor contract canary (local-live only) |
 | `npm run fmt` | `cargo fmt` + Prettier |
 | `npm run lint` | `clippy` + TypeScript check |
-| `npm run ci` | CI-equivalent local verification (no E2E) |
+| `npm run ci` | CI-equivalent local verification (no E2E, fake-only) |
 
-## Repository layout
+## Packaging / VM
 
-- `src/` — React/TypeScript UI (`domain`, `features`, `lib/tauri`)
-- `src-tauri/` — Tauri host and Rust module stubs (`app`, `contracts`, `scheduler`, …)
-- `crates/tiamat-contracts/` — versioned domain contracts and JSON Schema validation
-- `schemas/` — canonical JSON Schemas
-- `fixtures/contracts/` — valid and invalid compatibility fixtures
-- `e2e/` — Playwright smoke tests against the dev host
-
-P00 keeps orchestration as a fake/no-op scheduler stub. Real scheduling lands in later phases.
+Windows NSIS + MSI targets are configured in `src-tauri/tauri.conf.json`. Install/upgrade/uninstall matrix documentation and scripts live under `scripts/vm/` and must run in a disposable snapshotted Windows VM (see that README for privileges, reboot policy, and retained artifacts).
 
 ## Testing policy
 
-Automated tests use deterministic fixtures only. No paid or live Cursor CLI calls are made in CI or default local test commands.
+Automated tests and `npm run ci` / default E2E use deterministic fixtures only. No paid or live Cursor CLI calls are made in CI.
+
+The release-gate local-live canary (`npm run test:canary`) requires explicit spending consent env vars and is version-gated; it is never part of deterministic CI.
 
 ## Canonical plan
 

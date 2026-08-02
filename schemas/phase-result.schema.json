@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tiamat.local/schemas/phase-result.schema.json",
+  "title": "PhaseResult",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "phaseId",
+    "status",
+    "summary",
+    "changedFiles",
+    "evidenceIds",
+    "acceptanceSatisfied",
+    "artifacts",
+    "immutable"
+  ],
+  "properties": {
+    "schemaVersion": { "type": "integer", "const": 1 },
+    "phaseId": { "type": "string", "minLength": 1 },
+    "attemptId": { "type": "string", "format": "uuid" },
+    "status": {
+      "type": "string",
+      "enum": ["passed", "failed", "needs_review"]
+    },
+    "summary": { "type": "string", "minLength": 1 },
+    "changedFiles": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "evidenceIds": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "acceptanceSatisfied": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "notes": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "immutable": { "type": "boolean", "const": true },
+    "progressUseful": { "type": "boolean" },
+    "interruption": { "type": ["string", "null"] }
+  }
+}

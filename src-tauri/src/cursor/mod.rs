@@ -1,3 +1,25 @@
-//! Cursor CLI adapter — stub for P03.
+//! Cursor CLI adapter: resolve, probe, feature-aware command builder, stream parser.
+
+pub mod builder;
+pub mod probe;
+pub mod process;
+pub mod redaction;
+pub mod resolve;
+pub mod stream;
+pub mod types;
+
+pub use builder::{build_cursor_command, preview_built_command, BuilderError};
+pub use probe::{
+    discover_features, invalidate_probe_cache, list_cursor_models, parse_models_output,
+    parse_version_string, probe_cursor_capability, probe_cursor_capability_with_configured,
+    probe_with_deps,
+};
+pub use process::{run_argv_capture, run_argv_capture_env};
+pub use resolve::{
+    resolve_cursor_executable, resolve_cursor_executable_with_configured,
+    resolve_from_configured_and_env,
+};
+pub use stream::parse_stream_json;
+pub use types::*;
 
 pub const MODULE: &str = "cursor";

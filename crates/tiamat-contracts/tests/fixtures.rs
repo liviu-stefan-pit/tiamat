@@ -88,6 +88,7 @@ fn all_valid_fixtures_validate() {
         ("intake-manifest.schema.json", "intake-manifest.valid.json"),
         ("event-envelope.schema.json", "event-envelope.valid.json"),
         ("project-plan.schema.json", "project-plan.valid.json"),
+        ("phase-result.schema.json", "phase-result.valid.json"),
     ];
     for (schema_name, fixture_name) in cases {
         let schema = compile_schema(&schema_path(schema_name)).expect("schema compile");

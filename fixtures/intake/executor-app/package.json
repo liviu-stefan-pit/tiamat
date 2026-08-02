@@ -1,0 +1,11 @@
+{
+  "name": "tiamat-executor-fixture",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node tests/unit.mjs",
+    "test:integration": "node tests/integration.mjs",
+    "test:e2e": "node tests/e2e.mjs"
+  }
+}

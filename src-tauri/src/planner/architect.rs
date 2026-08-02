@@ -1,0 +1,506 @@
+use std::path::{Path, PathBuf};
+
+use tiamat_contracts::ProjectPlan;
+use uuid::Uuid;
+
+use std::collections::HashMap;
+
+use crate::cursor::{
+    parse_stream_json, CursorCapabilityReport, ProcessCapture, DEFAULT_CURSOR_TIMEOUT_MS,
+};
+use crate::db::Store;
+use crate::intake::PreflightReport;
+use crate::planner::context::package_architect_context;
+use crate::planner::invoke::build_architect_command;
+use crate::planner::model::select_architect_model;
+use crate::planner::parse::extract_final_json_object;
+use crate::planner::persist::{checkpoint_control_plan, write_plan_artifacts};
+use crate::planner::prompt::{repair_prompt, ARCHITECT_SYSTEM_PROMPT};
+use crate::planner::types::{
+    ArchitectAttemptRecord, ArchitectRunResult, GraphEdge, GraphNode, GraphProjection,
+};
+use crate::planner::validate::validate_plan_json;
+use crate::process::{
+    run_capture_hosted, watchdog_for_timeout, HostedSpawnContext, ProcessHost, SpawnRequest,
+};
+use crate::workspace::{write_manifest, RunWorkspaceManifest};
+
+const ARCHITECT_TIMEOUT_MS: u64 = 180_000;
+
+pub struct ArchitectPipelineRequest<'a> {
+    pub run_id: Uuid,
+    pub preflight: &'a PreflightReport,
+    pub workspace: &'a mut RunWorkspaceManifest,
+    pub capability: &'a CursorCapabilityReport,
+    /// Optional override executable argv prefix for tests (e.g. node + fake-agent.mjs).
+    pub executable_override: Option<&'a str>,
+    /// Production: AppState ProcessHost + Store. Tests may omit (ephemeral hosted).
+    pub host: Option<HostedSpawnContext<'a>>,
+}
+
+/// Run the architect → validate → (one repair) → persist → checkpoint pipeline.
+pub fn run_architect_pipeline(req: ArchitectPipelineRequest<'_>) -> ArchitectRunResult {
+    let mut evidence = Vec::new();
+    let mut attempts = Vec::new();
+
+    let model_selection = match select_architect_model(&req.capability.models) {
+        Ok(sel) => sel,
+        Err(err) => {
+            return ArchitectRunResult {
+                ok: false,
+                run_id: req.run_id.to_string(),
+                model_selection: crate::planner::types::ArchitectModelSelection {
+                    requested_model: crate::planner::types::ARCHITECT_PREFERRED_MODEL.into(),
+                    selected_model: String::new(),
+                    degraded: false,
+                    reason: err.clone(),
+                    available_models: req.capability.models.iter().map(|m| m.id.clone()).collect(),
+                },
+                plan: None,
+                plan_json_path: None,
+                master_plan_md_path: None,
+                hashes: None,
+                checkpoint: None,
+                attempts,
+                degraded_mode: false,
+                error: Some(err),
+                evidence,
+            };
+        }
+    };
+    evidence.push(format!(
+        "model_selection: requested={} selected={} degraded={}",
+        model_selection.requested_model, model_selection.selected_model, model_selection.degraded
+    ));
+
+    let executable = match req.executable_override {
+        Some(path) => path.to_string(),
+        None => match &req.capability.executable {
+            Some(path) => path.clone(),
+            None => {
+                return fail(
+                    req.run_id,
+                    model_selection,
+                    attempts,
+                    evidence,
+                    "Cursor CLI executable missing".into(),
+                );
+            }
+        },
+    };
+
+    let context = package_architect_context(req.preflight, req.workspace);
+    evidence.push(format!(
+        "context_coverage={} omissions={}",
+        context.coverage.len(),
+        context.omitted.len()
+    ));
+
+    let user_prompt = format!(
+        "{ARCHITECT_SYSTEM_PROMPT}\n\n---\n\n# Bounded intake context\n\n{}\n",
+        context.text
+    );
+
+    let control_root = PathBuf::from(&req.workspace.control_root);
+    let workspace_mount = architect_workspace_mount(req.workspace);
+
+    // Attempt 1
+    let (plan, chat_id) = match invoke_and_validate(
+        &executable,
+        req.capability,
+        &workspace_mount,
+        &model_selection.selected_model,
+        &user_prompt,
+        None,
+        req.run_id,
+        req.workspace,
+        false,
+        &mut attempts,
+        &mut evidence,
+        req.host.as_ref(),
+    ) {
+        Ok(pair) => pair,
+        Err(issues) => {
+            // One repair resume only.
+            let Some(parent_chat) = attempts.last().and_then(|a| a.chat_id.clone()) else {
+                return fail(
+                    req.run_id,
+                    model_selection,
+                    attempts,
+                    evidence,
+                    format!(
+                        "architect output invalid and no chat id for repair: {}",
+                        issues.join("; ")
+                    ),
+                );
+            };
+            evidence.push("repair_resume_started".into());
+            let repair = repair_prompt(&issues);
+            match invoke_and_validate(
+                &executable,
+                req.capability,
+                &workspace_mount,
+                &model_selection.selected_model,
+                &repair,
+                Some(parent_chat.as_str()),
+                req.run_id,
+                req.workspace,
+                true,
+                &mut attempts,
+                &mut evidence,
+                req.host.as_ref(),
+            ) {
+                Ok(pair) => pair,
+                Err(repair_issues) => {
+                    return fail(
+                        req.run_id,
+                        model_selection,
+                        attempts,
+                        evidence,
+                        format!("architect repair failed: {}", repair_issues.join("; ")),
+                    );
+                }
+            }
+        }
+    };
+    let _ = chat_id;
+
+    // Persist atomically into control/.tiamat and checkpoint.
+    let (json_path, md_path, hashes) = match write_plan_artifacts(&control_root, &plan) {
+        Ok(v) => v,
+        Err(err) => {
+            return fail(
+                req.run_id,
+                model_selection,
+                attempts,
+                evidence,
+                format!("plan persist failed: {err}"),
+            );
+        }
+    };
+    evidence.push(format!("wrote {}", json_path.display()));
+    evidence.push(format!("wrote {}", md_path.display()));
+
+    let checkpoint = match checkpoint_control_plan(req.workspace, "initial-architect-plan") {
+        Ok(cp) => cp,
+        Err(err) => {
+            return fail(
+                req.run_id,
+                model_selection,
+                attempts,
+                evidence,
+                format!("control checkpoint failed: {err}"),
+            );
+        }
+    };
+    evidence.push(format!("checkpoint {}", checkpoint.commit));
+
+    if let Err(err) = write_manifest(req.workspace) {
+        evidence.push(format!("manifest rewrite warning: {err}"));
+    }
+
+    ArchitectRunResult {
+        ok: true,
+        run_id: req.run_id.to_string(),
+        degraded_mode: model_selection.degraded,
+        model_selection,
+        plan: Some(plan),
+        plan_json_path: Some(json_path.display().to_string()),
+        master_plan_md_path: Some(md_path.display().to_string()),
+        hashes: Some(hashes),
+        checkpoint: Some(checkpoint),
+        attempts,
+        error: None,
+        evidence,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn invoke_and_validate(
+    executable: &str,
+    capability: &CursorCapabilityReport,
+    workspace_mount: &Path,
+    model: &str,
+    prompt: &str,
+    resume_chat_id: Option<&str>,
+    run_id: Uuid,
+    workspace: &RunWorkspaceManifest,
+    repaired: bool,
+    attempts: &mut Vec<ArchitectAttemptRecord>,
+    evidence: &mut Vec<String>,
+    host: Option<&HostedSpawnContext<'_>>,
+) -> Result<(ProjectPlan, Option<String>), Vec<String>> {
+    let (built, proof) = build_architect_command(
+        executable,
+        &capability.features,
+        workspace_mount,
+        model,
+        prompt,
+        resume_chat_id,
+        Some(ARCHITECT_TIMEOUT_MS.max(DEFAULT_CURSOR_TIMEOUT_MS)),
+    )
+    .map_err(|e| vec![e])?;
+
+    evidence.push(format!(
+        "architect_invoke plan_mode={} force={} argv_len={}",
+        proof.plan_mode,
+        proof.force,
+        proof.argv.len()
+    ));
+    if !proof.cannot_implement() {
+        return Err(vec![
+            "architect path violated cannot-implement invariant".into()
+        ]);
+    }
+
+    // Support `node|path/to/fake-agent.mjs` executable encoding used by resolve/tests.
+    let argv = expand_executable_argv(&built.argv);
+
+    let mut fake_env = HashMap::new();
+    fake_env.insert("TIAMAT_FAKE_PLAN_RUN_ID".into(), run_id.to_string());
+    if let Some(project) = workspace.projects.first() {
+        fake_env.insert(
+            "TIAMAT_FAKE_PLAN_PROJECT_ID".into(),
+            project.project_id.clone(),
+        );
+        fake_env.insert(
+            "TIAMAT_FAKE_PLAN_WRITE_ROOT".into(),
+            project.write_root.clone(),
+        );
+        fake_env.insert(
+            "TIAMAT_FAKE_PLAN_READ_ROOT".into(),
+            project
+                .read_roots
+                .first()
+                .cloned()
+                .unwrap_or_else(|| workspace.managed_run_root.clone()),
+        );
+    } else if let Some(notes) = workspace.notes_roots.first() {
+        fake_env.insert("TIAMAT_FAKE_PLAN_PROJECT_ID".into(), "notes".into());
+        fake_env.insert("TIAMAT_FAKE_PLAN_WRITE_ROOT".into(), notes.clone());
+        fake_env.insert("TIAMAT_FAKE_PLAN_READ_ROOT".into(), notes.clone());
+    }
+
+    let capture = run_architect_hosted(
+        host,
+        run_id,
+        &argv,
+        built.timeout_ms,
+        Some(&built.stdin),
+        &fake_env,
+    )
+    .map_err(|e| vec![e])?;
+    let parsed = parse_stream_json(&capture.stdout, &capture.stderr, &[]);
+    let chat_id = parsed.chat_id.clone();
+
+    let mut issues = Vec::new();
+    if capture.timed_out {
+        issues.push("architect process timed out".into());
+    }
+    if capture.exit_code.unwrap_or(1) != 0 {
+        issues.push(format!(
+            "architect exited with code {:?}",
+            capture.exit_code
+        ));
+    }
+
+    let json_text = match extract_final_json_object(&parsed.assistant_text)
+        .or_else(|_| extract_final_json_object(&capture.stdout))
+    {
+        Ok(text) => text,
+        Err(err) => {
+            issues.push(err);
+            attempts.push(ArchitectAttemptRecord {
+                attempt: (attempts.len() as u32) + 1,
+                model: model.to_string(),
+                chat_id: chat_id.clone(),
+                usage: parsed.usage.clone(),
+                exit_code: capture.exit_code,
+                repaired,
+                validation_issues: issues
+                    .iter()
+                    .map(|m| crate::planner::types::PlanValidationIssue {
+                        code: "parse".into(),
+                        message: m.clone(),
+                        phase_id: None,
+                    })
+                    .collect(),
+                proof,
+            });
+            return Err(issues);
+        }
+    };
+
+    match validate_plan_json(&json_text, run_id, workspace) {
+        Ok(plan) => {
+            attempts.push(ArchitectAttemptRecord {
+                attempt: (attempts.len() as u32) + 1,
+                model: model.to_string(),
+                chat_id: chat_id.clone(),
+                usage: parsed.usage.clone(),
+                exit_code: capture.exit_code,
+                repaired,
+                validation_issues: vec![],
+                proof,
+            });
+            Ok((plan, chat_id))
+        }
+        Err(validation_issues) => {
+            let messages: Vec<String> = validation_issues
+                .iter()
+                .map(|i| format!("{}: {}", i.code, i.message))
+                .collect();
+            attempts.push(ArchitectAttemptRecord {
+                attempt: (attempts.len() as u32) + 1,
+                model: model.to_string(),
+                chat_id: chat_id.clone(),
+                usage: parsed.usage.clone(),
+                exit_code: capture.exit_code,
+                repaired,
+                validation_issues,
+                proof,
+            });
+            Err(messages)
+        }
+    }
+}
+
+fn expand_executable_argv(argv: &[String]) -> Vec<String> {
+    if argv.is_empty() {
+        return argv.to_vec();
+    }
+    let first = &argv[0];
+    if let Some((prog, script)) = first.split_once('|') {
+        let mut out = vec![prog.to_string(), script.to_string()];
+        out.extend(argv.iter().skip(1).cloned());
+        out
+    } else {
+        argv.to_vec()
+    }
+}
+
+fn architect_workspace_mount(workspace: &RunWorkspaceManifest) -> PathBuf {
+    // Prefer notes (rough-spec) then control root — never a product write root alone.
+    if let Some(notes) = workspace.notes_roots.first() {
+        return PathBuf::from(notes);
+    }
+    PathBuf::from(&workspace.control_root)
+}
+
+fn fail(
+    run_id: Uuid,
+    model_selection: crate::planner::types::ArchitectModelSelection,
+    attempts: Vec<ArchitectAttemptRecord>,
+    evidence: Vec<String>,
+    error: String,
+) -> ArchitectRunResult {
+    let degraded_mode = model_selection.degraded;
+    ArchitectRunResult {
+        ok: false,
+        run_id: run_id.to_string(),
+        model_selection,
+        plan: None,
+        plan_json_path: None,
+        master_plan_md_path: None,
+        hashes: None,
+        checkpoint: None,
+        attempts,
+        degraded_mode,
+        error: Some(error),
+        evidence,
+    }
+}
+
+pub fn project_graph(plan: &ProjectPlan) -> GraphProjection {
+    let nodes = plan
+        .phases
+        .iter()
+        .map(|p| GraphNode {
+            phase_id: p.phase_id.clone(),
+            title: p.title.clone(),
+            status: normalize_phase_status(&p.status),
+            model_tier: normalize_model_tier(&p.model_tier),
+            objective: p.objective.clone(),
+        })
+        .collect();
+    let mut edges = Vec::new();
+    for phase in &plan.phases {
+        for dep in &phase.dependencies {
+            edges.push(GraphEdge {
+                from: dep.clone(),
+                to: phase.phase_id.clone(),
+            });
+        }
+    }
+    GraphProjection {
+        run_id: plan.run_id.to_string(),
+        title: plan.title.clone(),
+        nodes,
+        edges,
+    }
+}
+
+fn normalize_phase_status(status: &tiamat_contracts::PhaseStatus) -> String {
+    match status {
+        tiamat_contracts::PhaseStatus::Draft => "draft",
+        tiamat_contracts::PhaseStatus::Ready => "ready",
+        tiamat_contracts::PhaseStatus::Queued => "queued",
+        tiamat_contracts::PhaseStatus::Running => "running",
+        tiamat_contracts::PhaseStatus::Verifying => "verifying",
+        tiamat_contracts::PhaseStatus::Passed => "passed",
+        tiamat_contracts::PhaseStatus::Failed => "failed",
+        tiamat_contracts::PhaseStatus::Blocked => "blocked",
+        tiamat_contracts::PhaseStatus::Cancelled => "cancelled",
+        tiamat_contracts::PhaseStatus::Skipped => "skipped",
+        tiamat_contracts::PhaseStatus::NeedsReview => "needs_review",
+    }
+    .into()
+}
+
+fn run_architect_hosted(
+    host: Option<&HostedSpawnContext<'_>>,
+    run_id: Uuid,
+    argv: &[String],
+    timeout_ms: u64,
+    stdin: Option<&str>,
+    env: &HashMap<String, String>,
+) -> Result<ProcessCapture, String> {
+    let env_vec: Vec<(String, String)> = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let request = SpawnRequest {
+        run_id,
+        phase_id: Some("architect".into()),
+        attempt_id: None,
+        argv: argv.to_vec(),
+        stdin: stdin.map(str::to_string),
+        workspace: None,
+        env: env_vec,
+        watchdog: watchdog_for_timeout(timeout_ms),
+        resume_chat_hint: None,
+        next_model_on_timeout: None,
+        next_tier_on_timeout: None,
+    };
+    match host {
+        Some(ctx) => {
+            let _ = ctx.store.create_run(run_id, "architect", "planning");
+            run_capture_hosted(ctx.store, ctx.host, request).map_err(|e| e.to_string())
+        }
+        None => {
+            let dir = std::env::temp_dir().join(format!("tiamat-architect-{}", Uuid::new_v4()));
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            let store = Store::open_in_memory(&dir).map_err(|e| e.to_string())?;
+            let _ = store.create_run(run_id, "architect-ephemeral", "planning");
+            let ph = ProcessHost::new();
+            run_capture_hosted(&store, &ph, request).map_err(|e| e.to_string())
+        }
+    }
+}
+
+fn normalize_model_tier(tier: &tiamat_contracts::ModelTier) -> String {
+    match tier {
+        tiamat_contracts::ModelTier::Composer => "composer",
+        tiamat_contracts::ModelTier::GrokLow => "grok-low",
+        tiamat_contracts::ModelTier::GrokMedium => "grok-medium",
+        tiamat_contracts::ModelTier::GrokHigh => "grok-high",
+    }
+    .into()
+}

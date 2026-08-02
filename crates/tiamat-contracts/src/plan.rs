@@ -103,7 +103,7 @@ pub enum ModelTier {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum PhaseStatus {
     Draft,
     Ready,
@@ -149,5 +149,121 @@ impl ProjectPlan {
             );
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::validation::{compile_schema_named, validate_json};
+    use serde_json::{json, Value};
+
+    const SCHEMA_STATUSES: &[&str] = &[
+        "draft",
+        "ready",
+        "queued",
+        "running",
+        "verifying",
+        "passed",
+        "failed",
+        "blocked",
+        "cancelled",
+        "skipped",
+        "needs_review",
+    ];
+
+    fn all_rust_statuses() -> Vec<PhaseStatus> {
+        vec![
+            PhaseStatus::Draft,
+            PhaseStatus::Ready,
+            PhaseStatus::Queued,
+            PhaseStatus::Running,
+            PhaseStatus::Verifying,
+            PhaseStatus::Passed,
+            PhaseStatus::Failed,
+            PhaseStatus::Blocked,
+            PhaseStatus::Cancelled,
+            PhaseStatus::Skipped,
+            PhaseStatus::NeedsReview,
+        ]
+    }
+
+    #[test]
+    fn phase_status_serde_matches_schema_enum() {
+        let serialized: Vec<String> = all_rust_statuses()
+            .iter()
+            .map(|s| serde_json::to_value(s).unwrap())
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            serialized,
+            SCHEMA_STATUSES
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect::<Vec<_>>()
+        );
+
+        for (wire, expected) in SCHEMA_STATUSES.iter().zip(all_rust_statuses()) {
+            let got: PhaseStatus = serde_json::from_value(Value::String((*wire).into())).unwrap();
+            assert_eq!(got, expected, "wire={wire}");
+        }
+    }
+
+    #[test]
+    fn needs_review_is_snake_case_not_needsreview() {
+        let value = serde_json::to_value(PhaseStatus::NeedsReview).unwrap();
+        assert_eq!(value, json!("needs_review"));
+        let back: PhaseStatus = serde_json::from_value(json!("needs_review")).unwrap();
+        assert_eq!(back, PhaseStatus::NeedsReview);
+        assert!(serde_json::from_value::<PhaseStatus>(json!("needsreview")).is_err());
+    }
+
+    #[test]
+    fn phase_status_round_trip_against_project_plan_schema() {
+        let schema = compile_schema_named("project-plan.schema.json").expect("embedded schema");
+        // Minimal plan skeleton; swap only status.
+        let base = json!({
+            "schemaVersion": 1,
+            "runId": "a1b2c3d4-e5f6-4789-a012-3456789abcde",
+            "title": "t",
+            "summary": "s",
+            "assumptions": [],
+            "risks": [],
+            "phases": [{
+                "phaseId": "P01",
+                "title": "t",
+                "objective": "o",
+                "dependencies": [],
+                "projectIds": ["p"],
+                "readRoots": ["."],
+                "writeRoots": ["."],
+                "modelTier": "composer",
+                "estimatedMinutes": 1,
+                "acceptanceCriteria": [],
+                "unitTests": [],
+                "integrationTests": [],
+                "e2eTests": [],
+                "manualChecks": [],
+                "rollback": { "checkpoint": "c", "strategy": "restore" },
+                "expectedArtifacts": [],
+                "prompt": "p",
+                "status": "draft",
+                "evidence": []
+            }],
+            "finalGates": []
+        });
+
+        for status in SCHEMA_STATUSES {
+            let mut plan = base.clone();
+            plan["phases"][0]["status"] = json!(status);
+            validate_json(&schema, &plan).unwrap_or_else(|e| panic!("{status}: {e}"));
+            let typed: ProjectPlan = serde_json::from_value(plan.clone()).expect(status);
+            assert_eq!(
+                serde_json::to_value(&typed.phases[0].status).unwrap(),
+                json!(status)
+            );
+            let round = serde_json::to_value(&typed).unwrap();
+            validate_json(&schema, &round).unwrap_or_else(|e| panic!("round-trip {status}: {e}"));
+        }
     }
 }

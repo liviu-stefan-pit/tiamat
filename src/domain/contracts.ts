@@ -144,6 +144,7 @@ export interface AppInfo {
   version: string;
   schemaVersion: number;
   orchestratorMode: string;
+  storeSchemaVersion?: number;
 }
 
 export interface ContractValidationResult {
@@ -161,7 +162,8 @@ export interface OrchestratorStatus {
 export type ContractSchemaName =
   | "intake-manifest"
   | "event-envelope"
-  | "project-plan";
+  | "project-plan"
+  | "phase-result";
 
 export function assertSchemaVersion(
   schemaVersion: number,

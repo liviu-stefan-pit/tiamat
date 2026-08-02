@@ -1,0 +1,77 @@
+.tiamat-settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.tiamat-settings-header h2,
+.tiamat-settings-header h3 {
+  margin: 0;
+}
+
+.tiamat-settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.tiamat-settings-meta {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0;
+}
+
+.tiamat-settings-meta div {
+  display: grid;
+  grid-template-columns: 7rem 1fr;
+  gap: 0.5rem;
+}
+
+.tiamat-settings-meta dt {
+  color: #9aa8b8;
+}
+
+.tiamat-settings-meta dd {
+  margin: 0;
+  word-break: break-all;
+}
+
+.tiamat-feature-list,
+.tiamat-settings-models ul {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: #c5d0dc;
+  font-size: 0.85rem;
+}
+
+.tiamat-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  color: #9aa8b8;
+  font-size: 0.85rem;
+}
+
+.tiamat-field input,
+.tiamat-field textarea {
+  border: 1px solid #243041;
+  border-radius: 8px;
+  background: #0f141b;
+  color: #e8edf2;
+  padding: 0.45rem 0.55rem;
+  font: inherit;
+}
+
+.tiamat-settings pre {
+  margin: 0;
+  padding: 0.65rem;
+  border-radius: 8px;
+  background: #0f141b;
+  border: 1px solid #243041;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.8rem;
+  color: #c5d0dc;
+}

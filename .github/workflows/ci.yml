@@ -46,5 +46,8 @@ jobs:
       - name: Frontend unit tests
         run: npm run test:frontend
 
+      - name: Documentation validation
+        run: npm run test:docs
+
       - name: E2E smoke (dev host)
         run: npm run test:e2e

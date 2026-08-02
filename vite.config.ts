@@ -25,8 +25,14 @@ export default defineConfig(async () => ({
         }
       : undefined,
     watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      // 3. ignore Rust crate, security fixtures (junction loops), and build artifacts
+      ignored: [
+        "**/src-tauri/**",
+        "**/fixtures/**",
+        "**/artifacts/**",
+        "**/target/**",
+        "**/test-results/**",
+      ],
     },
   },
 }));
