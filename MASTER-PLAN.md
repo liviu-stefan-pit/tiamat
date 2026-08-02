@@ -251,9 +251,10 @@ Suggested boundaries:
 ### 7.3 Data ownership
 
 - SQLite is authoritative for run state, events, attempts, and recovery.
-- Every run has exactly one run-level `.tiamat/plan.json` in its managed run root; it is the portable machine-readable plan across all included projects.
-- Every run has exactly one run-level `.tiamat/MASTER-PLAN.md`, deterministically rendered from that JSON and mounted read-only for agents.
-- Agents submit phase-result payloads to the orchestrator. Only the orchestrator changes SQLite and regenerates the plan pair, so multi-project parallelism cannot create plan-write conflicts.
+- Every run has exactly one run-level `.tiamat/MASTER-PLAN.md` authored by the architect (canonical human plan), mounted read-only for agents.
+- Every run has exactly one run-level `.tiamat/plan.json` compiled by Tiamat from that Markdown for scheduling/execution.
+- Tiamat may also write `.tiamat/PLAN-SCHEDULE.md` as a status projection derived from `plan.json`; phase updates refresh JSON + schedule without clobbering the architect Markdown.
+- Agents submit phase-result payloads to the orchestrator. Only the orchestrator changes SQLite and regenerates machine plan artifacts, so multi-project parallelism cannot create plan-write conflicts.
 - The run root contains a dedicated control repository for `.tiamat/*` and ignores sibling owned project clones. Each attempt receives the run root as a readable workspace plus only its assigned writable project root.
 - Git commits are authoritative checkpoints for workspace content.
 - Graph positions are UI metadata and cannot alter dependencies.
@@ -582,12 +583,12 @@ The initial architect:
 - selects the cheapest likely successful model tier;
 - specifies unit, integration, E2E, manual, and live tests per phase as applicable;
 - adds final independent reviews, documentation, and a TestBench/sample app when useful;
-- emits schema-valid JSON from which Tiamat deterministically renders matching Markdown;
+- emits a complete structured MASTER-PLAN.md from which Tiamat compiles schema-valid plan.json;
 - never implements product code during the architecture run.
 
 ### 12.2 Architect system prompt
 
-Use the following as the stable system instruction, then append the generated intake manifest, inventory summaries, policy, and output schema.
+Use the following as the stable system instruction, then append the generated intake manifest, inventory summaries, policy, and Markdown output contract.
 
 ```text
 You are Tiamat's principal software architect. You are the only premium planning
@@ -629,36 +630,82 @@ PLAN DESIGN
   documentation, and a TestBench/sample application when the product benefits.
 
 PROMPTS
-- Put a complete copy-paste implementation prompt in every phase.
-- Each prompt must require the agent to read .tiamat/MASTER-PLAN.md and
-  .tiamat/plan.json, inspect current git status and prior evidence, implement only
-  its assigned phase, preserve unrelated work, add/run appropriate unit,
-  integration, and E2E tests, and return a schema-valid immutable phase-result
-  payload. The orchestrator alone updates SQLite and renders both plan artifacts
-  transactionally, preventing concurrent agents from corrupting shared plan files.
-- Submitting that result is the agent's explicit request to update its phase in the master plan; the orchestrator-mediated render is the only valid update mechanism.
-- Prompts must forbid declaring success without command output and artifacts.
+- Do not write giant copy-paste implementation prompts in your answer.
+- Tiamat synthesizes each phase agent prompt from your structured phase sections.
+- Focus on deep design: rationale, boundaries, risks, acceptance, and tests.
 
 OUTPUT
-- Return only one JSON object matching the supplied schema.
+- Return one complete MASTER-PLAN.md as your assistant answer (fenced ```markdown
+  or raw Markdown). That Markdown is the canonical human plan.
+- Do not return a ProjectPlan JSON object as the chat answer. Tiamat compiles
+  .tiamat/plan.json from your structured Markdown.
 - Use stable phase IDs and an acyclic dependency graph.
-- Supply all schema fields required for Tiamat to deterministically render a
-  complete .tiamat/MASTER-PLAN.md; do not embed a second hand-written plan.
 - Do not leave placeholders, TODO questions, or vague acceptance criteria.
-- Treat machine JSON as canonical; Markdown is an orchestrator-rendered projection.
+- Include the structured sections below exactly so Tiamat can compile scheduling
+  data without another model call.
+
+STRUCTURED MARKDOWN CONTRACT
+# <title>
+
+## Summary
+<one or more paragraphs>
+
+## Assumptions
+- <assumption>
+
+## Risks
+- <risk>
+
+## Phase: <phaseId> — <title>
+
+Write any depth/narrative you need, then include these machine fields as bullets:
+
+- **phaseId**: P01
+- **objective**: <objective; mention inapplicable test layers here when empty>
+- **dependencies**: none
+- **projectIds**: <comma-separated managed project ids>
+- **readRoots**: <path> | <path>
+- **writeRoots**: <path>
+- **modelTier**: composer | grok-low | grok-medium | grok-high
+- **estimatedMinutes**: <integer>
+- **rollbackCheckpoint**: <checkpoint name>
+- **rollbackStrategy**: restore | quarantine
+- **expectedArtifacts**: <path>, <path>
+
+### Acceptance criteria
+- `AC-P01-01` — <description> — evidence: unit
+
+### Unit tests
+- `UT-P01-01` — command: `npm` `test` — cwd: `.` — timeout: 120 — covers: AC-P01-01
+  OR `- (none) — reason: <why unit tests are inapplicable>`
+
+### Integration tests
+- (none) — reason: <why>   OR a test bullet like Unit tests
+
+### E2E tests
+- (none) — reason: <why>   OR a test bullet like Unit tests
+
+### Manual checks
+- (none)   OR `- <description> — blocking: true|false`
+
+Repeat `## Phase: …` for every phase.
+
+## Final gates
+- `FG-01` — <description> — deps: P01 — evidence: review
 ```
 
 ### 12.3 Plan compilation
 
-1. Parse architect stream and locate the final JSON object.
-2. Validate against schema.
-3. Validate DAG acyclicity, references, roots, tiers, tests, and final gates.
-4. Compare requested roots against approved managed roots.
-5. If invalid, resume the architect once with validation errors and request JSON repair only.
-6. Persist canonical `.tiamat/plan.json` and deterministically render `.tiamat/MASTER-PLAN.md` in the dedicated run-control repository through one recoverable plan-update transaction.
-7. Commit the control repository as the first run checkpoint.
-8. Load plan into SQLite and graph projection.
-9. Re-render and hash-check Markdown against JSON; stop before execution on disagreement.
+1. Parse architect stream and extract MASTER-PLAN.md from assembled assistant text (ignore session/control frames).
+2. Compile structured Markdown into ProjectPlan JSON (orchestrator synthesizes phase prompts).
+3. Validate against schema.
+4. Validate DAG acyclicity, references, roots, tiers, tests, and final gates.
+5. Compare requested roots against approved managed roots.
+6. If invalid, resume the architect once with validation errors and request Markdown repair only.
+7. Persist canonical `.tiamat/MASTER-PLAN.md`, derived `.tiamat/plan.json`, and `.tiamat/PLAN-SCHEDULE.md` in the dedicated run-control repository through one recoverable plan-update transaction.
+8. Commit the control repository as the first run checkpoint.
+9. Load plan into SQLite and graph projection.
+10. Hash-check the schedule projection against JSON; stop before execution on disagreement.
 
 ## 13. Scheduler and model router
 

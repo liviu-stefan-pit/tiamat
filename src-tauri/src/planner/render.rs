@@ -1,8 +1,9 @@
 use sha2::{Digest, Sha256};
 use tiamat_contracts::{ModelTier, PhasePlan, PhaseStatus, ProjectPlan, TestSpec};
 
-/// Deterministically render `.tiamat/MASTER-PLAN.md` from canonical JSON.
-pub fn render_master_plan_markdown(plan: &ProjectPlan) -> String {
+/// Deterministically render `.tiamat/PLAN-SCHEDULE.md` from derived `plan.json`.
+/// Architect-authored `.tiamat/MASTER-PLAN.md` is the canonical human plan.
+pub fn render_plan_schedule_markdown(plan: &ProjectPlan) -> String {
     let mut out = String::new();
     out.push_str(&format!("# {}\n\n", plan.title));
     out.push_str(&format!("Run ID: `{}`  \n", plan.run_id));
@@ -56,8 +57,16 @@ pub fn render_master_plan_markdown(plan: &ProjectPlan) -> String {
     }
 
     out.push_str("---\n\n");
-    out.push_str("_Rendered by Tiamat from canonical `.tiamat/plan.json`. Do not hand-edit._\n");
+    out.push_str(
+        "_Schedule projection derived from `.tiamat/plan.json`. Canonical design lives in \
+         `.tiamat/MASTER-PLAN.md`._\n",
+    );
     out
+}
+
+/// Backward-compatible alias used by older call sites / tests.
+pub fn render_master_plan_markdown(plan: &ProjectPlan) -> String {
+    render_plan_schedule_markdown(plan)
 }
 
 fn render_phase(phase: &PhasePlan) -> String {
@@ -190,17 +199,21 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(hasher.finalize())
 }
 
-/// Re-render and hash-check Markdown against JSON; returns error on disagreement.
-pub fn verify_markdown_projection(plan: &ProjectPlan, markdown: &str) -> Result<String, String> {
-    let expected = render_master_plan_markdown(plan);
+/// Re-render and hash-check PLAN-SCHEDULE.md against plan.json.
+pub fn verify_schedule_projection(plan: &ProjectPlan, markdown: &str) -> Result<String, String> {
+    let expected = render_plan_schedule_markdown(plan);
     let expected_hash = sha256_hex(expected.as_bytes());
     let actual_hash = sha256_hex(markdown.as_bytes());
     if expected != markdown || expected_hash != actual_hash {
         return Err(format!(
-            "Markdown projection disagrees with JSON (expected={expected_hash}, actual={actual_hash})"
+            "PLAN-SCHEDULE.md disagrees with plan.json (expected={expected_hash}, actual={actual_hash})"
         ));
     }
     Ok(expected_hash)
+}
+
+pub fn verify_markdown_projection(plan: &ProjectPlan, markdown: &str) -> Result<String, String> {
+    verify_schedule_projection(plan, markdown)
 }
 
 #[cfg(test)]

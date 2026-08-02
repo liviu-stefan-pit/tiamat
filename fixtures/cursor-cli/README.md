@@ -18,9 +18,9 @@
 # - auth_failure
 # - flood_oversized
 # - secret_echo
-# - architect_valid (plan-mode JSON plan; requires --mode plan, rejects --force)
-# - architect_invalid (schema/semantic-invalid plan)
-# - architect_repairable (invalid first, valid on --resume)
+# - architect_valid (plan-mode structured MASTER-PLAN.md; requires --mode plan, rejects --force)
+# - architect_invalid (structurally/semantically invalid Markdown plan)
+# - architect_repairable (invalid first, valid Markdown on --resume)
 # - architect_no_sol (valid plan; model list omits SOL; architect prefers Grok High)
 # - impl_success (writes src/feature.ts + immutable phase-result; ensures gate scripts)
 # - impl_fail_tests (writes feature but unit gate exits 1)

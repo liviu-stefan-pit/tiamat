@@ -1,6 +1,6 @@
-//! Exact architect system policy from MASTER-PLAN §12.2.
+//! Architect system policy (MASTER-PLAN §12.2): MD-first structured plan.
 
-/// Stable architect system instruction. Must match MASTER-PLAN.md §12.2 verbatim.
+/// Stable architect system instruction. Must match MASTER-PLAN.md §12.2.
 pub const ARCHITECT_SYSTEM_PROMPT: &str = r#"You are Tiamat's principal software architect. You are the only premium planning
 agent in this run. The user will not answer questions while you work. Act as an
 ultimate architect: inspect all supplied material, infer the actual goal, identify
@@ -40,28 +40,75 @@ PLAN DESIGN
   documentation, and a TestBench/sample application when the product benefits.
 
 PROMPTS
-- Put a complete copy-paste implementation prompt in every phase.
-- Each prompt must require the agent to read .tiamat/MASTER-PLAN.md and
-  .tiamat/plan.json, inspect current git status and prior evidence, implement only
-  its assigned phase, preserve unrelated work, add/run appropriate unit,
-  integration, and E2E tests, and return a schema-valid immutable phase-result
-  payload. The orchestrator alone updates SQLite and renders both plan artifacts
-  transactionally, preventing concurrent agents from corrupting shared plan files.
-- Submitting that result is the agent's explicit request to update its phase in the master plan; the orchestrator-mediated render is the only valid update mechanism.
-- Prompts must forbid declaring success without command output and artifacts.
+- Do not write giant copy-paste implementation prompts in your answer.
+- Tiamat synthesizes each phase agent prompt from your structured phase sections.
+- Focus on deep design: rationale, boundaries, risks, acceptance, and tests.
 
 OUTPUT
-- Return only one JSON object matching the supplied schema.
+- Return one complete MASTER-PLAN.md as your assistant answer (fenced ```markdown
+  or raw Markdown). That Markdown is the canonical human plan.
+- Do not return a ProjectPlan JSON object as the chat answer. Tiamat compiles
+  .tiamat/plan.json from your structured Markdown.
 - Use stable phase IDs and an acyclic dependency graph.
-- Supply all schema fields required for Tiamat to deterministically render a
-  complete .tiamat/MASTER-PLAN.md; do not embed a second hand-written plan.
 - Do not leave placeholders, TODO questions, or vague acceptance criteria.
-- Treat machine JSON as canonical; Markdown is an orchestrator-rendered projection."#;
+- Include the structured sections below exactly so Tiamat can compile scheduling
+  data without another model call.
+
+STRUCTURED MARKDOWN CONTRACT
+# <title>
+
+## Summary
+<one or more paragraphs>
+
+## Assumptions
+- <assumption>
+
+## Risks
+- <risk>
+
+## Phase: <phaseId> — <title>
+
+Write any depth/narrative you need, then include these machine fields as bullets:
+
+- **phaseId**: P01
+- **objective**: <objective; mention inapplicable test layers here when empty>
+- **dependencies**: none
+- **projectIds**: <comma-separated managed project ids>
+- **readRoots**: <path> | <path>
+- **writeRoots**: <path>
+- **modelTier**: composer | grok-low | grok-medium | grok-high
+- **estimatedMinutes**: <integer>
+- **rollbackCheckpoint**: <checkpoint name>
+- **rollbackStrategy**: restore | quarantine
+- **expectedArtifacts**: <path>, <path>
+
+### Acceptance criteria
+- `AC-P01-01` — <description> — evidence: unit
+
+### Unit tests
+- `UT-P01-01` — command: `npm` `test` — cwd: `.` — timeout: 120 — covers: AC-P01-01
+  OR `- (none) — reason: <why unit tests are inapplicable>`
+
+### Integration tests
+- (none) — reason: <why>   OR a test bullet like Unit tests
+
+### E2E tests
+- (none) — reason: <why>   OR a test bullet like Unit tests
+
+### Manual checks
+- (none)   OR `- <description> — blocking: true|false`
+
+Repeat `## Phase: …` for every phase.
+
+## Final gates
+- `FG-01` — <description> — deps: P01 — evidence: review"#;
 
 pub fn repair_prompt(issues: &[String]) -> String {
     let mut body = String::from(
-        "Repair the previous plan JSON only. Do not implement code. Return one \
-         corrected JSON object matching the supplied schema. Validation errors:\n",
+        "Repair the previous MASTER-PLAN.md only. Do not implement code. Return one \
+         corrected complete Markdown document using the structured phase/final-gate \
+         contract (fenced ```markdown or raw Markdown). Do not return ProjectPlan JSON. \
+         Validation / compile errors:\n",
     );
     for (idx, issue) in issues.iter().enumerate() {
         body.push_str(&format!("{}. {}\n", idx + 1, issue));
@@ -74,10 +121,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn system_prompt_embeds_no_implement_and_plan_only_output() {
+    fn system_prompt_embeds_md_first_and_no_implement() {
         assert!(ARCHITECT_SYSTEM_PROMPT.contains("Do not implement code"));
-        assert!(ARCHITECT_SYSTEM_PROMPT.contains("Return only one JSON object"));
-        assert!(ARCHITECT_SYSTEM_PROMPT.contains(".tiamat/MASTER-PLAN.md"));
-        assert!(ARCHITECT_SYSTEM_PROMPT.contains(".tiamat/plan.json"));
+        assert!(ARCHITECT_SYSTEM_PROMPT.contains("MASTER-PLAN.md"));
+        assert!(ARCHITECT_SYSTEM_PROMPT.contains("Do not return a ProjectPlan JSON"));
+        assert!(ARCHITECT_SYSTEM_PROMPT.contains("## Phase:"));
+        assert!(ARCHITECT_SYSTEM_PROMPT.contains("**phaseId**"));
+        assert!(!ARCHITECT_SYSTEM_PROMPT.contains("Return only one JSON object"));
+    }
+
+    #[test]
+    fn repair_prompt_targets_markdown() {
+        let text = repair_prompt(&["missing phase markers".into()]);
+        assert!(text.contains("MASTER-PLAN.md"));
+        assert!(text.contains("Do not return ProjectPlan JSON"));
+        assert!(text.contains("missing phase markers"));
     }
 }

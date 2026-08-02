@@ -20,7 +20,7 @@ use crate::executor::prompt::{assemble_phase_prompt, assemble_recovery_prompt};
 use crate::executor::recover::{decide_partial_recovery, PartialRecoveryDecision};
 use crate::executor::result::extract_phase_result;
 use crate::executor::types::{ExecutionMode, PhaseExecutionOutcome, RecoveryReport};
-use crate::planner::{render_master_plan_markdown, write_plan_artifacts};
+use crate::planner::{render_plan_schedule_markdown, write_plan_artifacts};
 use crate::process::{
     run_capture_hosted, watchdog_for_timeout, HostedSpawnContext, ProcessHost, SpawnRequest,
 };
@@ -622,10 +622,10 @@ fn accept_phase_result(
 fn project_plan_files(workspace: &RunWorkspaceManifest, plan: &ProjectPlan) -> ExecutorResult<()> {
     let control = PathBuf::from(&workspace.control_root);
     write_plan_artifacts(&control, plan)?;
-    let md = render_master_plan_markdown(plan);
-    if !md.contains(&plan.title) {
+    let schedule = render_plan_schedule_markdown(plan);
+    if !schedule.contains(&plan.title) {
         return Err(ExecutorError::Message(
-            "plan markdown projection mismatch".into(),
+            "plan schedule projection mismatch".into(),
         ));
     }
     Ok(())

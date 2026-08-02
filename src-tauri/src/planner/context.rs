@@ -121,9 +121,10 @@ pub fn package_architect_context(
     ));
 
     sections.push(
-        "## Output schema\nReturn a ProjectPlan JSON object with schemaVersion=1 matching \
-         Tiamat's project-plan schema. Phases must use approved managed write/read roots. \
-         Do not implement product code.\n"
+        "## Output contract\nReturn one complete MASTER-PLAN.md (fenced ```markdown or raw \
+         Markdown) using the structured phase/final-gate contract from the system prompt. \
+         Do not return ProjectPlan JSON. Phases must use approved managed write/read roots. \
+         Do not implement product code. Tiamat compiles .tiamat/plan.json from your Markdown.\n"
             .into(),
     );
 

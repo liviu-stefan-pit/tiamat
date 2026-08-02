@@ -170,11 +170,16 @@ fn architect_valid_plan_persists_atomic_artifacts_and_graph() {
     let md_text = fs::read_to_string(&md_path).unwrap();
     assert!(md_text.contains(&plan.title));
     assert!(md_text.contains("P01"));
+    assert!(md_text.contains("Deep design"));
+    assert!(!md_text.contains("Do not hand-edit"));
     // JSON and Markdown phases match exactly via re-validation + renderer check.
     let revalidated = validate_plan_json(&json_text, run_id, &workspace).expect("revalidate");
     assert_eq!(revalidated.phases.len(), plan.phases.len());
     assert_eq!(revalidated.phases[0].phase_id, plan.phases[0].phase_id);
     assert!(md_text.contains(&plan.phases[0].title));
+    assert!(revalidated.phases[0]
+        .prompt
+        .contains(".tiamat/MASTER-PLAN.md"));
 
     let graph = project_graph(plan);
     assert_eq!(graph.nodes.len(), 1);

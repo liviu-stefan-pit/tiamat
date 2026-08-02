@@ -46,8 +46,9 @@ Feature panels under `src/features/*`, domain types under `src/domain`, Tauri br
 ## Data ownership
 
 - SQLite is authoritative for run state, events, attempts, recovery.
-- Each run has one `.tiamat/plan.json` and one rendered `.tiamat/MASTER-PLAN.md`.
-- Agents submit immutable phase-result payloads; only the orchestrator updates SQLite and plan projections.
+- Each run has one architect-authored `.tiamat/MASTER-PLAN.md` (canonical human plan) and one derived `.tiamat/plan.json` for scheduling.
+- `.tiamat/PLAN-SCHEDULE.md` is an optional status projection from `plan.json`; phase updates must not clobber the architect Markdown.
+- Agents submit immutable phase-result payloads; only the orchestrator updates SQLite and machine plan artifacts.
 - Git commits are authoritative content checkpoints.
 - Graph positions are UI metadata only.
 

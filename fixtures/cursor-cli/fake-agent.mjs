@@ -82,116 +82,103 @@ function assertArchitectPlanMode(argv) {
   }
 }
 
-function validArchitectPlan() {
-  const runId =
-    process.env.TIAMAT_FAKE_PLAN_RUN_ID ||
-    "d4e5f6a7-b8c9-4012-d345-6789abcdef01";
+function validArchitectMarkdown() {
   const projectId = process.env.TIAMAT_FAKE_PLAN_PROJECT_ID || "notes-app";
   const writeRoot =
     process.env.TIAMAT_FAKE_PLAN_WRITE_ROOT ||
     "C:\\\\managed\\\\run\\\\projects\\\\notes-app";
   const readRoot =
     process.env.TIAMAT_FAKE_PLAN_READ_ROOT || writeRoot;
-  return {
-    schemaVersion: 1,
-    runId,
-    title: "Rough-spec notes tool",
-    summary: "Turn brainstorm notes into a small testable notes list app.",
-    assumptions: ["Desktop-first MVP", "No cloud sync in v1"],
-    risks: ["Ambiguous scope in brainstorm notes"],
-    phases: [
-      {
-        phaseId: "P01",
-        title: "Notes list vertical slice",
-        objective:
-          "Render a notes list from fixture data. Integration tests inapplicable for notes-only MVP shell; e2e tests inapplicable until a UI host exists.",
-        dependencies: [],
-        projectIds: [projectId],
-        readRoots: [readRoot],
-        writeRoots: [writeRoot],
-        modelTier: "composer",
-        estimatedMinutes: 10,
-        acceptanceCriteria: [
-          {
-            criterionId: "AC-P01-01",
-            description: "Notes list unit test passes against fixture data",
-            requiredEvidenceKinds: ["unit"],
-          },
-        ],
-        unitTests: [
-          {
-            testId: "UT-P01-01",
-            command: ["npm", "test"],
-            workingDirectory: ".",
-            timeoutSeconds: 120,
-            resourceLocks: [],
-            expected: { exitCode: 0, artifacts: [] },
-            covers: ["AC-P01-01"],
-          },
-        ],
-        integrationTests: [],
-        e2eTests: [],
-        manualChecks: [],
-        rollback: { checkpoint: "intake-baseline", strategy: "restore" },
-        expectedArtifacts: ["src/notes.ts"],
-        prompt:
-          "Read .tiamat/MASTER-PLAN.md and .tiamat/plan.json. Inspect git status and prior evidence. Implement only P01. Preserve unrelated work. Add/run unit tests and return a schema-valid immutable phase-result payload.",
-        status: "draft",
-        evidence: [],
-      },
-    ],
-    finalGates: [
-      {
-        gateId: "FG-01",
-        description: "Independent architecture review",
-        dependencies: ["P01"],
-        requiredEvidenceKinds: ["review"],
-      },
-    ],
-  };
+  return `# Rough-spec notes tool
+
+## Summary
+Turn brainstorm notes into a small testable notes list app.
+
+## Assumptions
+- Desktop-first MVP
+- No cloud sync in v1
+
+## Risks
+- Ambiguous scope in brainstorm notes
+
+## Phase: P01 — Notes list vertical slice
+
+Deep design: fixture-backed list first; defer sync.
+
+- **phaseId**: P01
+- **objective**: Render a notes list from fixture data. Integration tests inapplicable for notes-only MVP shell; e2e tests inapplicable until a UI host exists.
+- **dependencies**: none
+- **projectIds**: ${projectId}
+- **readRoots**: ${readRoot}
+- **writeRoots**: ${writeRoot}
+- **modelTier**: composer
+- **estimatedMinutes**: 10
+- **rollbackCheckpoint**: intake-baseline
+- **rollbackStrategy**: restore
+- **expectedArtifacts**: src/notes.ts
+
+### Acceptance criteria
+- \`AC-P01-01\` — Notes list unit test passes against fixture data — evidence: unit
+
+### Unit tests
+- \`UT-P01-01\` — command: \`npm\` \`test\` — cwd: \`.\` — timeout: 120 — covers: AC-P01-01
+
+### Integration tests
+- (none) — reason: notes-only MVP
+
+### E2E tests
+- (none) — reason: no UI host yet
+
+### Manual checks
+- (none)
+
+## Final gates
+- \`FG-01\` — Independent architecture review — deps: P01 — evidence: review
+`;
 }
 
-function invalidArchitectPlan() {
-  const runId =
-    process.env.TIAMAT_FAKE_PLAN_RUN_ID ||
-    "d4e5f6a7-b8c9-4012-d345-6789abcdef01";
-  // Missing acceptance criteria, cyclic-looking self-dep, empty prompt.
-  return {
-    schemaVersion: 1,
-    runId,
-    title: "Broken plan",
-    summary: "intentionally invalid",
-    assumptions: [],
-    risks: [],
-    phases: [
-      {
-        phaseId: "P01",
-        title: "Broken",
-        objective: "TODO?",
-        dependencies: ["P01"],
-        projectIds: ["missing-project"],
-        readRoots: ["C:\\\\escape\\\\outside"],
-        writeRoots: ["C:\\\\escape\\\\outside"],
-        modelTier: "composer",
-        estimatedMinutes: 10,
-        acceptanceCriteria: [],
-        unitTests: [],
-        integrationTests: [],
-        e2eTests: [],
-        manualChecks: [],
-        rollback: { checkpoint: "x", strategy: "restore" },
-        expectedArtifacts: [],
-        prompt: "placeholder",
-        status: "draft",
-        evidence: [],
-      },
-    ],
-    finalGates: [],
-  };
+function invalidArchitectMarkdown() {
+  return `# Broken plan
+
+## Summary
+intentionally invalid
+
+## Phase: P01 — Broken
+
+- **phaseId**: P01
+- **objective**: TODO?
+- **dependencies**: P01
+- **projectIds**: missing-project
+- **readRoots**: C:\\\\escape\\\\outside
+- **writeRoots**: C:\\\\escape\\\\outside
+- **modelTier**: composer
+- **estimatedMinutes**: 10
+- **rollbackCheckpoint**: x
+- **rollbackStrategy**: restore
+- **expectedArtifacts**: none
+
+### Acceptance criteria
+- (none)
+
+### Unit tests
+- (none) — reason: none
+
+### Integration tests
+- (none) — reason: none
+
+### E2E tests
+- (none) — reason: none
+
+### Manual checks
+- (none)
+
+## Final gates
+- (none)
+`;
 }
 
-function streamArchitectPlan(plan, chatId) {
-  const text = "```json\n" + JSON.stringify(plan, null, 2) + "\n```";
+function streamArchitectPlan(markdown, chatId) {
+  const text = "```markdown\n" + markdown + "\n```";
   write(
     process.stdout,
     JSON.stringify({
@@ -199,6 +186,23 @@ function streamArchitectPlan(plan, chatId) {
       subtype: "init",
       session_id: chatId,
       model: process.env.TIAMAT_FAKE_PLAN_MODEL || "cursor-grok-4.5-high",
+    }) + "\n",
+  );
+  // Control / thinking frames with session_id must be ignored by the extractor.
+  write(
+    process.stdout,
+    JSON.stringify({
+      type: "thinking",
+      session_id: chatId,
+      text: "planning…",
+    }) + "\n",
+  );
+  write(
+    process.stdout,
+    JSON.stringify({
+      type: "tool_call",
+      session_id: chatId,
+      name: "readFile",
     }) + "\n",
   );
   write(
@@ -502,14 +506,14 @@ async function main() {
     case "architect_valid":
     case "architect_no_sol": {
       assertArchitectPlanMode(args);
-      streamArchitectPlan(validArchitectPlan(), "chat-architect-valid");
+      streamArchitectPlan(validArchitectMarkdown(), "chat-architect-valid");
       process.exit(0);
       break;
     }
 
     case "architect_invalid": {
       assertArchitectPlanMode(args);
-      streamArchitectPlan(invalidArchitectPlan(), "chat-architect-invalid");
+      streamArchitectPlan(invalidArchitectMarkdown(), "chat-architect-invalid");
       process.exit(0);
       break;
     }
@@ -518,9 +522,12 @@ async function main() {
       assertArchitectPlanMode(args);
       const resumeIdx = args.findIndex((a) => a === "--resume");
       if (resumeIdx >= 0) {
-        streamArchitectPlan(validArchitectPlan(), args[resumeIdx + 1] || "chat-architect-repair");
+        streamArchitectPlan(
+          validArchitectMarkdown(),
+          args[resumeIdx + 1] || "chat-architect-repair",
+        );
       } else {
-        streamArchitectPlan(invalidArchitectPlan(), "chat-architect-repair");
+        streamArchitectPlan(invalidArchitectMarkdown(), "chat-architect-repair");
       }
       process.exit(0);
       break;

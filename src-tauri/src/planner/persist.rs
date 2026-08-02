@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use tiamat_contracts::ProjectPlan;
 use uuid::Uuid;
 
-use crate::planner::render::{render_master_plan_markdown, sha256_hex, verify_markdown_projection};
+use crate::planner::render::{
+    render_plan_schedule_markdown, sha256_hex, verify_schedule_projection,
+};
 use crate::planner::types::PlanArtifactHashes;
 use crate::workspace::{
     create_control_checkpoint, CheckpointRecord, RunWorkspaceManifest, WorkspaceError,
@@ -20,7 +22,44 @@ pub fn master_plan_md_path(control_root: &Path) -> PathBuf {
     control_root.join(".tiamat").join("MASTER-PLAN.md")
 }
 
-/// Atomically write plan.json + MASTER-PLAN.md and verify Markdown projection.
+pub fn plan_schedule_md_path(control_root: &Path) -> PathBuf {
+    control_root.join(".tiamat").join("PLAN-SCHEDULE.md")
+}
+
+/// Persist architect-authored MASTER-PLAN.md (canonical) + derived plan.json + schedule projection.
+pub fn write_architect_plan_artifacts(
+    control_root: &Path,
+    architect_markdown: &str,
+    plan: &ProjectPlan,
+) -> WorkspaceResult<(PathBuf, PathBuf, PlanArtifactHashes)> {
+    let tiamat_dir = control_root.join(".tiamat");
+    fs::create_dir_all(&tiamat_dir)?;
+
+    let json_path = plan_json_path(control_root);
+    let md_path = master_plan_md_path(control_root);
+    let schedule_path = plan_schedule_md_path(control_root);
+
+    let json_text = serde_json::to_string_pretty(plan)
+        .map_err(|e| WorkspaceError::Message(format!("serialize plan: {e}")))?;
+    let schedule = render_plan_schedule_markdown(plan);
+    verify_schedule_projection(plan, &schedule).map_err(WorkspaceError::Message)?;
+
+    atomic_write(&md_path, architect_markdown.as_bytes())?;
+    atomic_write(&json_path, json_text.as_bytes())?;
+    atomic_write(&schedule_path, schedule.as_bytes())?;
+
+    Ok((
+        json_path,
+        md_path,
+        PlanArtifactHashes {
+            plan_json_sha256: sha256_hex(json_text.as_bytes()),
+            master_plan_md_sha256: sha256_hex(architect_markdown.as_bytes()),
+        },
+    ))
+}
+
+/// Atomically write derived plan.json + PLAN-SCHEDULE.md after phase updates.
+/// Leaves architect-authored MASTER-PLAN.md untouched when present.
 pub fn write_plan_artifacts(
     control_root: &Path,
     plan: &ProjectPlan,
@@ -30,24 +69,32 @@ pub fn write_plan_artifacts(
 
     let json_path = plan_json_path(control_root);
     let md_path = master_plan_md_path(control_root);
+    let schedule_path = plan_schedule_md_path(control_root);
 
     let json_text = serde_json::to_string_pretty(plan)
         .map_err(|e| WorkspaceError::Message(format!("serialize plan: {e}")))?;
-    let markdown = render_master_plan_markdown(plan);
-    verify_markdown_projection(plan, &markdown).map_err(WorkspaceError::Message)?;
+    let schedule = render_plan_schedule_markdown(plan);
+    verify_schedule_projection(plan, &schedule).map_err(WorkspaceError::Message)?;
 
     atomic_write(&json_path, json_text.as_bytes())?;
-    atomic_write(&md_path, markdown.as_bytes())?;
+    atomic_write(&schedule_path, schedule.as_bytes())?;
 
-    let written_md = fs::read_to_string(&md_path)?;
-    verify_markdown_projection(plan, &written_md).map_err(WorkspaceError::Message)?;
+    // Keep MASTER-PLAN.md hash stable when architect file already exists; otherwise
+    // seed a thin schedule copy so agents always have a markdown plan file.
+    let md_hash = if md_path.exists() {
+        let existing = fs::read_to_string(&md_path)?;
+        sha256_hex(existing.as_bytes())
+    } else {
+        atomic_write(&md_path, schedule.as_bytes())?;
+        sha256_hex(schedule.as_bytes())
+    };
 
     Ok((
         json_path,
         md_path,
         PlanArtifactHashes {
             plan_json_sha256: sha256_hex(json_text.as_bytes()),
-            master_plan_md_sha256: sha256_hex(markdown.as_bytes()),
+            master_plan_md_sha256: md_hash,
         },
     ))
 }
@@ -79,7 +126,7 @@ pub fn checkpoint_control_plan(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::planner::render::render_master_plan_markdown;
+    use crate::planner::render::render_plan_schedule_markdown;
     use crate::workspace::{
         configure_identity, git, ManagedProject, ManagedProjectKind, PromotionMetadata,
         PromotionStatus, RetentionPolicy, SourceFingerprint,
@@ -90,17 +137,8 @@ mod tests {
         TestExpected, TestKind, TestSpec,
     };
 
-    #[test]
-    fn atomic_write_and_checkpoint_control() {
-        let dir = tempdir().unwrap();
-        let control = dir.path().join("control");
-        fs::create_dir_all(control.join(".tiamat")).unwrap();
-        git(&control, &["init"]).unwrap();
-        configure_identity(&control).unwrap();
-        git(&control, &["add", "-A"]).unwrap();
-        git(&control, &["commit", "--allow-empty", "-m", "baseline"]).unwrap();
-
-        let plan = ProjectPlan {
+    fn sample_plan() -> ProjectPlan {
+        ProjectPlan {
             schema_version: 1,
             run_id: Uuid::nil(),
             title: "T".into(),
@@ -148,14 +186,41 @@ mod tests {
                 evidence: vec![],
             }],
             final_gates: vec![],
-        };
+        }
+    }
 
-        let (json_path, md_path, hashes) = write_plan_artifacts(&control, &plan).unwrap();
+    #[test]
+    fn architect_md_is_canonical_and_schedule_is_projection() {
+        let dir = tempdir().unwrap();
+        let control = dir.path().join("control");
+        fs::create_dir_all(control.join(".tiamat")).unwrap();
+        git(&control, &["init"]).unwrap();
+        configure_identity(&control).unwrap();
+        git(&control, &["add", "-A"]).unwrap();
+        git(&control, &["commit", "--allow-empty", "-m", "baseline"]).unwrap();
+
+        let plan = sample_plan();
+        let architect_md = "# T\n\n## Summary\nS\n\nArchitect depth lives here.\n";
+        let (json_path, md_path, hashes) =
+            write_architect_plan_artifacts(&control, architect_md, &plan).unwrap();
         assert!(json_path.exists());
         assert!(md_path.exists());
+        assert!(plan_schedule_md_path(&control).exists());
         assert!(!hashes.plan_json_sha256.is_empty());
         let md = fs::read_to_string(&md_path).unwrap();
-        assert_eq!(md, render_master_plan_markdown(&plan));
+        assert_eq!(md, architect_md);
+        assert!(md.contains("Architect depth"));
+        assert!(!md.contains("Do not hand-edit"));
+
+        // Phase update must not clobber architect MD.
+        let mut updated = plan.clone();
+        updated.phases[0].status = PhaseStatus::Passed;
+        write_plan_artifacts(&control, &updated).unwrap();
+        let md_after = fs::read_to_string(&md_path).unwrap();
+        assert_eq!(md_after, architect_md);
+        let schedule = fs::read_to_string(plan_schedule_md_path(&control)).unwrap();
+        assert_eq!(schedule, render_plan_schedule_markdown(&updated));
+        assert!(schedule.contains("passed"));
 
         let mut manifest = RunWorkspaceManifest {
             schema_version: 1,

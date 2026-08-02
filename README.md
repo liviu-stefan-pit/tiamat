@@ -17,7 +17,7 @@ You pick what to build from, pick where the result should go, and hit **Run**. T
 ```text
 Input (your sources)  →  preflight + trust
 Output folder         →  managed run-{id}/ copy (sources stay read-only)
-Architect (Grok High) →  plan.json + MASTER-PLAN.md
+Architect (Grok High) →  MASTER-PLAN.md (canonical) + derived plan.json
 Scheduler (DAG)       →  non-overlapping phases in parallel when safe
 Cursor agents         →  implement + tests inside the managed tree
 Live log              →  events streamed from the Rust process host

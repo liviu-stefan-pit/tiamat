@@ -11,7 +11,7 @@
 
 1. Materializes isolated owned clones/copies under the chosen output folder (`run-{uuid}/`).
 2. Runs the architect once (Cursor Grok High: `cursor-grok-4.5-high`).
-3. Compiles a validated project plan (`.tiamat/plan.json` + `.tiamat/MASTER-PLAN.md`).
+3. Compiles a validated project plan: architect `.tiamat/MASTER-PLAN.md` (canonical) plus derived `.tiamat/plan.json`.
 4. Schedules independent phases when write roots do not overlap.
 5. Executes Cursor CLI agents with Composer (simple) / Grok (all efforts) routing and verification gates.
 6. Streams structured events to the live log (stdout/stderr line-streamed).

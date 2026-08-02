@@ -14,8 +14,8 @@ use crate::intake::PreflightReport;
 use crate::planner::context::package_architect_context;
 use crate::planner::invoke::build_architect_command;
 use crate::planner::model::select_architect_model;
-use crate::planner::parse::extract_final_json_object;
-use crate::planner::persist::{checkpoint_control_plan, write_plan_artifacts};
+use crate::planner::md_plan::{compile_master_plan_markdown, extract_master_plan_markdown};
+use crate::planner::persist::{checkpoint_control_plan, write_architect_plan_artifacts};
 use crate::planner::prompt::{repair_prompt, ARCHITECT_SYSTEM_PROMPT};
 use crate::planner::types::{
     ArchitectAttemptRecord, ArchitectRunResult, GraphEdge, GraphNode, GraphProjection,
@@ -138,7 +138,7 @@ pub fn run_architect_pipeline(req: ArchitectPipelineRequest<'_>) -> ArchitectRun
     let workspace_mount = architect_workspace_mount(req.workspace);
 
     // Attempt 1
-    let (plan, chat_id) = match invoke_and_validate(
+    let (plan, markdown, chat_id) = match invoke_and_validate(
         &executable,
         req.capability,
         &workspace_mount,
@@ -154,7 +154,7 @@ pub fn run_architect_pipeline(req: ArchitectPipelineRequest<'_>) -> ArchitectRun
         &mut evidence,
         req.host.as_ref(),
     ) {
-        Ok(pair) => pair,
+        Ok(triple) => triple,
         Err(issues) => {
             let parent_chat = attempts.last().and_then(|a| a.chat_id.clone());
             if let Some(parent_chat) = parent_chat {
@@ -183,7 +183,7 @@ pub fn run_architect_pipeline(req: ArchitectPipelineRequest<'_>) -> ArchitectRun
                     &mut evidence,
                     req.host.as_ref(),
                 ) {
-                    Ok(pair) => pair,
+                    Ok(triple) => triple,
                     Err(repair_issues) => {
                         return fail(
                             req.run_id,
@@ -219,7 +219,7 @@ pub fn run_architect_pipeline(req: ArchitectPipelineRequest<'_>) -> ArchitectRun
                     &mut evidence,
                     req.host.as_ref(),
                 ) {
-                    Ok(pair) => pair,
+                    Ok(triple) => triple,
                     Err(retry_issues) => {
                         return fail(
                             req.run_id,
@@ -238,19 +238,20 @@ pub fn run_architect_pipeline(req: ArchitectPipelineRequest<'_>) -> ArchitectRun
     };
     let _ = chat_id;
 
-    // Persist atomically into control/.tiamat and checkpoint.
-    let (json_path, md_path, hashes) = match write_plan_artifacts(&control_root, &plan) {
-        Ok(v) => v,
-        Err(err) => {
-            return fail(
-                req.run_id,
-                model_selection,
-                attempts,
-                evidence,
-                format!("plan persist failed: {err}"),
-            );
-        }
-    };
+    // Persist architect MD (canonical) + derived plan.json + schedule projection.
+    let (json_path, md_path, hashes) =
+        match write_architect_plan_artifacts(&control_root, &markdown, &plan) {
+            Ok(v) => v,
+            Err(err) => {
+                return fail(
+                    req.run_id,
+                    model_selection,
+                    attempts,
+                    evidence,
+                    format!("plan persist failed: {err}"),
+                );
+            }
+        };
     evidence.push(format!("wrote {}", json_path.display()));
     evidence.push(format!("wrote {}", md_path.display()));
 
@@ -360,7 +361,7 @@ fn invoke_and_validate(
     attempts: &mut Vec<ArchitectAttemptRecord>,
     evidence: &mut Vec<String>,
     host: Option<&HostedSpawnContext<'_>>,
-) -> Result<(ProjectPlan, Option<String>), Vec<String>> {
+) -> Result<(ProjectPlan, String, Option<String>), Vec<String>> {
     let (built, proof) = build_architect_command(
         executable,
         &capability.features,
@@ -480,41 +481,35 @@ fn invoke_and_validate(
         capture.stderr.len()
     ));
 
-    // Prefer assistant-assembled text when it is a plan; otherwise scan stream for plan JSON.
-    let json_text = match extract_final_json_object(&parsed.assistant_text)
-        .ok()
-        .and_then(|text| {
-            serde_json::from_str::<serde_json::Value>(&text)
-                .ok()
-                .filter(looks_like_project_plan)
-                .map(|_| text)
-        }) {
-        Some(text) => text,
-        None => match extract_plan_json_object_from_stream(&capture.stdout) {
-            Ok(text) => text,
-            Err(err) => {
-                issues.push(err);
-                attempts.push(ArchitectAttemptRecord {
-                    attempt: (attempts.len() as u32) + 1,
-                    model: model.to_string(),
-                    chat_id: chat_id.clone(),
-                    usage: parsed.usage.clone(),
-                    exit_code: capture.exit_code,
-                    repaired,
-                    validation_issues: issues
-                        .iter()
-                        .map(|m| crate::planner::types::PlanValidationIssue {
-                            code: "parse".into(),
-                            message: m.clone(),
-                            phase_id: None,
-                        })
-                        .collect(),
-                    proof,
-                });
-                return Err(issues);
-            }
-        },
+    // Prefer assembled assistant markdown; never treat session/control frames as the plan.
+    let markdown = match extract_master_plan_markdown(&parsed.assistant_text) {
+        Ok(md) => md,
+        Err(err) => {
+            issues.push(err);
+            attempts.push(ArchitectAttemptRecord {
+                attempt: (attempts.len() as u32) + 1,
+                model: model.to_string(),
+                chat_id: chat_id.clone(),
+                usage: parsed.usage.clone(),
+                exit_code: capture.exit_code,
+                repaired,
+                validation_issues: issues
+                    .iter()
+                    .map(|m| crate::planner::types::PlanValidationIssue {
+                        code: "parse".into(),
+                        message: m.clone(),
+                        phase_id: None,
+                    })
+                    .collect(),
+                proof,
+            });
+            return Err(issues);
+        }
     };
+    evidence.push(format!(
+        "extracted_master_plan_md_chars={}",
+        markdown.chars().count()
+    ));
 
     if !issues.is_empty() && parsed.terminal_ok == Some(false) {
         attempts.push(ArchitectAttemptRecord {
@@ -536,6 +531,55 @@ fn invoke_and_validate(
         });
         return Err(issues);
     }
+
+    let compiled = match compile_master_plan_markdown(&markdown, run_id) {
+        Ok(plan) => plan,
+        Err(compile_issues) => {
+            let mut messages = compile_issues;
+            messages.extend(issues);
+            attempts.push(ArchitectAttemptRecord {
+                attempt: (attempts.len() as u32) + 1,
+                model: model.to_string(),
+                chat_id: chat_id.clone(),
+                usage: parsed.usage.clone(),
+                exit_code: capture.exit_code,
+                repaired,
+                validation_issues: messages
+                    .iter()
+                    .map(|m| crate::planner::types::PlanValidationIssue {
+                        code: "md_compile".into(),
+                        message: m.clone(),
+                        phase_id: None,
+                    })
+                    .collect(),
+                proof,
+            });
+            return Err(messages);
+        }
+    };
+
+    let json_text = match serde_json::to_string_pretty(&compiled) {
+        Ok(text) => text,
+        Err(err) => {
+            let msg = format!("serialize compiled plan: {err}");
+            issues.push(msg.clone());
+            attempts.push(ArchitectAttemptRecord {
+                attempt: (attempts.len() as u32) + 1,
+                model: model.to_string(),
+                chat_id: chat_id.clone(),
+                usage: parsed.usage.clone(),
+                exit_code: capture.exit_code,
+                repaired,
+                validation_issues: vec![crate::planner::types::PlanValidationIssue {
+                    code: "serialize".into(),
+                    message: msg.clone(),
+                    phase_id: None,
+                }],
+                proof,
+            });
+            return Err(issues);
+        }
+    };
 
     match validate_plan_json(&json_text, run_id, workspace) {
         Ok(plan) => {
@@ -574,7 +618,7 @@ fn invoke_and_validate(
                 validation_issues: vec![],
                 proof,
             });
-            Ok((plan, chat_id))
+            Ok((plan, markdown, chat_id))
         }
         Err(validation_issues) => {
             let mut messages: Vec<String> = validation_issues
@@ -653,50 +697,6 @@ fn extract_chat_id_from_text(text: &str) -> Option<String> {
         }
     }
     None
-}
-
-fn extract_plan_json_object_from_stream(stdout: &str) -> Result<String, String> {
-    // Prefer last JSONL object that looks like a ProjectPlan.
-    let mut last_plan = None;
-    for line in stdout.lines() {
-        let trimmed = line.trim();
-        if !trimmed.starts_with('{') {
-            continue;
-        }
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
-            if looks_like_project_plan(&v) {
-                last_plan = Some(trimmed.to_string());
-            }
-        }
-    }
-    if let Some(plan) = last_plan {
-        return Ok(plan);
-    }
-    // Fall back to assistant-style extraction, but never accept stream control frames.
-    let candidate = extract_final_json_object(stdout)?;
-    let value: serde_json::Value =
-        serde_json::from_str(&candidate).map_err(|e| format!("extracted JSON is invalid: {e}"))?;
-    if looks_like_project_plan(&value) {
-        return Ok(candidate);
-    }
-    Err("architect stream had no ProjectPlan JSON (ignored session/control frames)".into())
-}
-
-fn looks_like_project_plan(value: &serde_json::Value) -> bool {
-    if value.get("session_id").is_some() && value.get("phases").is_none() {
-        return false;
-    }
-    if value
-        .get("type")
-        .and_then(|t| t.as_str())
-        .is_some_and(|t| matches!(t, "system" | "result" | "tool_call" | "user" | "assistant"))
-        && value.get("phases").is_none()
-    {
-        return false;
-    }
-    value.get("schemaVersion").is_some()
-        && value.get("phases").and_then(|p| p.as_array()).is_some()
-        && (value.get("runId").is_some() || value.get("run_id").is_some())
 }
 
 fn fail(
